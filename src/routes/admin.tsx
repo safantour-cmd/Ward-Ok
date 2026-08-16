@@ -359,35 +359,36 @@ function getUniqueSubmissionDates(
   startDate?: string,
   endDate?: string
 ): string[] {
+  const todayStr = isoDate();
+
   if (startDate && endDate) {
-    const range = getDatesInRange(startDate, endDate);
+    const range = getDatesInRange(startDate, endDate).filter((d) => d <= todayStr);
     if (range.length > 0) {
       return ascending ? range : [...range].reverse();
     }
   }
 
   const dates = new Set<string>();
-  const todayStr = isoDate();
   dates.add(todayStr);
 
   members.forEach((m) => {
     const uData = getUserDataForMember(m, userDataMap);
     if (!uData) return;
     if (uData.prayerLogs && Array.isArray(uData.prayerLogs)) {
-      uData.prayerLogs.forEach((p: any) => p.date && dates.add(p.date));
+      uData.prayerLogs.forEach((p: any) => p.date && p.date <= todayStr && dates.add(p.date));
     }
     if (uData.thikrProgress && Array.isArray(uData.thikrProgress)) {
-      uData.thikrProgress.forEach((t: any) => t.date && dates.add(t.date));
+      uData.thikrProgress.forEach((t: any) => t.date && t.date <= todayStr && dates.add(t.date));
     }
     if (uData.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
-      uData.customHabitProgress.forEach((h: any) => h.date && dates.add(h.date));
+      uData.customHabitProgress.forEach((h: any) => h.date && h.date <= todayStr && dates.add(h.date));
     }
     if (uData.quranDailyReading && Array.isArray(uData.quranDailyReading)) {
-      uData.quranDailyReading.forEach((q: any) => q.date && dates.add(q.date));
+      uData.quranDailyReading.forEach((q: any) => q.date && q.date <= todayStr && dates.add(q.date));
     }
   });
 
-  let array = Array.from(dates);
+  let array = Array.from(dates).filter((d) => d <= todayStr);
   if (startDate) {
     array = array.filter((d) => d >= startDate);
   }
@@ -488,14 +489,16 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
   const customHabits = uData?.customHabits || [];
 
   // Unified list of dates for daily breakdown - sorted from smallest/earliest date to largest (e.g. 3, 4, 5)
+  const todayStr = isoDate();
   const displayDates = uniqueDates.length > 0 
-    ? [...uniqueDates].sort((a, b) => a.localeCompare(b))
+    ? [...uniqueDates].filter((d) => d <= todayStr).sort((a, b) => a.localeCompare(b))
     : Array.from(new Set([
+        todayStr,
         ...(prayerLogs || []).map((p: any) => p.date),
         ...(uData?.thikrProgress || []).map((t: any) => t.date),
         ...(uData?.customHabitProgress || []).map((h: any) => h.date),
         ...(uData?.quranDailyReading || []).map((q: any) => q.date)
-      ])).filter(Boolean).sort((a, b) => a.localeCompare(b));
+      ])).filter(Boolean).filter((d) => d <= todayStr).sort((a, b) => a.localeCompare(b));
 
   const showAll = !activeCategory || activeCategory === "mostDays" || activeCategory === "name" || activeCategory === "totalAvg";
 
@@ -1222,7 +1225,7 @@ function AdminPage() {
   const [expandedMemberKey, setExpandedMemberKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"byDate" | "byMember">("byDate");
   const [onlySubmitted, setOnlySubmitted] = useState<boolean>(false);
-  const [dateSortAsc, setDateSortAsc] = useState<boolean>(true);
+  const [dateSortAsc, setDateSortAsc] = useState<boolean>(false);
   const [memberSortMode, setMemberSortMode] = useState<"name" | "totalAvg" | "mostDays" | "quran" | "athkar" | "prayer" | "habits">("name");
   const [filterStartDate, setFilterStartDate] = useState<string>("");
   const [filterEndDate, setFilterEndDate] = useState<string>("");
@@ -2323,7 +2326,10 @@ function AdminPage() {
             {viewMode === "byDate" && (
               <div className="space-y-4">
                 {getUniqueSubmissionDates(members, userDataMap, dateSortAsc).map((dateStr) => {
-                  const isDayCollapsed = !!collapsedDays[dateStr];
+                  // Default to collapsed for all dates including today unless explicitly opened by user
+                  const isDayCollapsed = collapsedDays[dateStr] !== undefined
+                    ? collapsedDays[dateStr]
+                    : true;
 
                   // Sort members on this day by who submitted and completed the most first
                   const sortedMembers = [...members].sort((a, b) => {
