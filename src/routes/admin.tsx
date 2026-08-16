@@ -8,7 +8,7 @@ import { createGlobalHabit, updateGlobalHabit, deleteGlobalHabit } from "@/lib/h
 import { createGlobalThikr, updateGlobalThikr, deleteGlobalThikr } from "@/lib/athkar";
 import { isoDate, formatArabicDate, arabicMonthYear } from "@/lib/date-utils";
 import { totalPagesFor, surahName } from "@/lib/quran-text";
-import { ShieldCheck, Users, Download, Plus, Sparkles, Lock, ArrowRight, CheckCircle2, Clock, BookOpen, CircleDot, Award, Calendar, RefreshCw, Edit2, Trash2, ChevronDown, ChevronUp, Eye, EyeOff, Trophy, Filter, Heart, CalendarCheck, CalendarDays, Search, X, Layers, ListFilter, Tag } from "lucide-react";
+import { ShieldCheck, Users, Download, Plus, Sparkles, Lock, ArrowRight, CheckCircle2, Clock, BookOpen, CircleDot, Award, Calendar, RefreshCw, Edit2, Trash2, ChevronDown, ChevronUp, Eye, EyeOff, Trophy, Filter, Heart, CalendarCheck, CalendarDays, Search, X, Layers, ListFilter, Tag, FileSpreadsheet, ChevronRight } from "lucide-react";
 
 export const Route = createFileRoute("/admin")({
   component: AdminPage,
@@ -896,6 +896,108 @@ function AllUserHabitsModal({ isOpen, onClose, members, userDataMap, globalHabit
     return habitName.includes(q) || habitDesc.includes(q);
   });
 
+  // Export Added Habits (Modal content) to Excel
+  const exportHabitsModalToExcel = () => {
+    let rowsHtml = "";
+    let thHeaders = "";
+    let title = "";
+
+    if (activeTab === "users") {
+      title = "تقرير الأخلاق والسنن التي أضافها المستخدمون";
+      thHeaders = `
+        <th>الرقم</th>
+        <th>اسم الخُلق</th>
+        <th>الوصف</th>
+        <th>العضو الذي أضافه</th>
+        <th>البريد الإلكتروني</th>
+        <th>أيام الإنجاز</th>
+        <th>إجمالي التسجيلات</th>
+      `;
+
+      filteredUserHabits.forEach((item, idx) => {
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right; color: #581c87;">${item.habit.name || "—"}</td>
+            <td style="text-align: right;">${item.habit.description || "—"}</td>
+            <td style="font-weight: bold; text-align: right;">${item.member.displayName || "بدون اسم"}</td>
+            <td style="text-align: left; dir: ltr;">${item.member.email || "—"}</td>
+            <td style="text-align: center; font-weight: bold; color: #15803d;">${item.completedDaysCount} يوم</td>
+            <td style="text-align: center;">${item.totalLogsCount}</td>
+          </tr>
+        `;
+      });
+    } else {
+      title = "تقرير الأخلاق والسنن العامة للمدير";
+      thHeaders = `
+        <th>الرقم</th>
+        <th>اسم الخُلق</th>
+        <th>الوصف</th>
+        <th>نوع الزهرة</th>
+      `;
+
+      filteredGlobalHabits.forEach((gh: any, idx: number) => {
+        const flower = FLOWER_META[gh.flower_type || "tulip"] || FLOWER_META.tulip;
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right; color: #b45309;">${gh.name || "—"}</td>
+            <td style="text-align: right;">${gh.description || "—"}</td>
+            <td style="text-align: center;">${flower.label}</td>
+          </tr>
+        `;
+      });
+    }
+
+    const excelHtml = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+        <!--[if gte mso 9]>
+        <xml>
+          <x:ExcelWorkbook>
+            <x:ExcelWorksheets>
+              <x:ExcelWorksheet>
+                <x:Name>الأخلاق المضافة</x:Name>
+                <x:WorksheetOptions>
+                  <x:DisplayRightToLeft/>
+                </x:WorksheetOptions>
+              </x:ExcelWorksheet>
+            </x:ExcelWorksheets>
+          </x:ExcelWorkbook>
+        </xml>
+        <![endif]-->
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+          table { border-collapse: collapse; width: 100%; direction: rtl; }
+          th { background-color: #7e22ce; color: #ffffff; font-weight: bold; padding: 10px; border: 1px solid #6b21a8; text-align: center; }
+          td { padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; }
+        </style>
+      </head>
+      <body dir="rtl">
+        <h2 style="text-align: center; color: #581c87; font-family: sans-serif;">${title} 🌸</h2>
+        <table>
+          <thead>
+            <tr>${thHeaders}</tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob(["\uFEFF" + excelHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `تقرير_الأخلاق_المضافة_${activeTab === "users" ? "المستخدمين" : "المدير"}_${isoDate()}.xls`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/60 backdrop-blur-xs text-right dir-rtl animate-in fade-in duration-150">
       <div className="bg-white w-full max-w-3xl max-h-[88vh] rounded-3xl shadow-2xl border border-purple-200 flex flex-col overflow-hidden">
@@ -963,8 +1065,19 @@ function AllUserHabitsModal({ isOpen, onClose, members, userDataMap, globalHabit
             </div>
           </div>
 
-          {/* Search Box & Toggle Hide Info Button */}
+          {/* Search Box & Actions */}
           <div className="flex items-center gap-2 w-full sm:w-auto">
+            {/* Excel Download button for Added Habits */}
+            <button
+              type="button"
+              onClick={exportHabitsModalToExcel}
+              title="تصدير الأخلاق المضافة كملف إكسل (Excel)"
+              className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black transition-all cursor-pointer shadow-2xs flex items-center gap-1.5 border border-emerald-700 shrink-0"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              <span className="hidden sm:inline">تصدير إكسل</span>
+            </button>
+
             {/* Small icon-only toggle button for author and completion info */}
             <button
               type="button"
@@ -980,13 +1093,13 @@ function AllUserHabitsModal({ isOpen, onClose, members, userDataMap, globalHabit
             </button>
 
             {/* Simple Search Box */}
-            <div className="relative w-full sm:w-52">
+            <div className="relative w-full sm:w-48">
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="ابحث باسم الخلق أو العضو..."
+                placeholder="ابحث..."
                 className="w-full pl-3 pr-8 py-1.5 text-xs font-bold rounded-xl border border-purple-200 focus:outline-hidden focus:border-purple-500 focus:ring-1 focus:ring-purple-200 bg-white"
               />
               {searchQuery && (
@@ -1497,7 +1610,423 @@ function AdminPage() {
     }
   };
 
-  // Generate & Download Detailed Excel / CSV File with distinct columns
+  // Helper to trigger Excel file download
+  const triggerExcelDownload = (htmlContent: string, fileName: string, sheetName: string = "التقرير") => {
+    const excelHtml = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+        <!--[if gte mso 9]>
+        <xml>
+          <x:ExcelWorkbook>
+            <x:ExcelWorksheets>
+              <x:ExcelWorksheet>
+                <x:Name>${sheetName}</x:Name>
+                <x:WorksheetOptions>
+                  <x:DisplayRightToLeft/>
+                </x:WorksheetOptions>
+              </x:ExcelWorksheet>
+            </x:ExcelWorksheets>
+          </x:ExcelWorkbook>
+        </xml>
+        <![endif]-->
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+          table { border-collapse: collapse; width: 100%; direction: rtl; }
+          th { background-color: #0d9488; color: #ffffff; font-weight: bold; padding: 10px; border: 1px solid #0f766e; text-align: center; }
+          td { padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; }
+        </style>
+      </head>
+      <body dir="rtl">
+        ${htmlContent}
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob(["\uFEFF" + excelHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `${fileName}.xls`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Helper to extract selected Quran surahs for a member
+  const getMemberQuranSurahsText = (uData?: UserCloudData): string => {
+    if (!uData) return "—";
+    let selectedSurahIds: number[] = [];
+    if (uData.dailyQuranSelection && Array.isArray(uData.dailyQuranSelection) && uData.dailyQuranSelection.length > 0) {
+      const sorted = [...uData.dailyQuranSelection].reverse();
+      for (const sel of sorted) {
+        if (sel.surah_ids && Array.isArray(sel.surah_ids) && sel.surah_ids.length > 0) {
+          selectedSurahIds = sel.surah_ids;
+          break;
+        }
+      }
+    }
+    if (selectedSurahIds.length === 0 && uData.quranSurahState && Array.isArray(uData.quranSurahState) && uData.quranSurahState.length > 0) {
+      selectedSurahIds = uData.quranSurahState.map((s: any) => s.surah_id).filter(Boolean);
+    }
+    if (selectedSurahIds.length === 0) return "لم يتم تحديد سور";
+    return selectedSurahIds.map((sId) => surahName(sId)).join("، ");
+  };
+
+  // Helper to extract Athkar text for a member
+  const getMemberAthkarText = (uData?: UserCloudData): string => {
+    if (!uData || !uData.thikrItems || uData.thikrItems.length === 0) return "لا توجد أذكار";
+    return uData.thikrItems.map((item: any) => {
+      const name = item.text || item.name || "ذِكر";
+      const target = item.target_count || 1;
+      return `${name} (${target} مرة)`;
+    }).join(" | ");
+  };
+
+  // Helper to extract custom habits text for a member
+  const getMemberHabitsText = (uData?: UserCloudData): string => {
+    if (!uData || !uData.customHabits || uData.customHabits.length === 0) return "لا توجد أخلاق مخصصة";
+    return uData.customHabits.map((h: any) => h.name || "خُلق").join("، ");
+  };
+
+  // 1. Export Specific Criteria Excel (Quran, Athkar, Prayer, Habits, Alphabetical, Total Average, Most Days)
+  const exportCurrentCriteriaToExcel = () => {
+    const evalDates = getUniqueSubmissionDates(members, userDataMap, true, filterStartDate, filterEndDate);
+    const dateRangeLabel = filterStartDate && filterEndDate 
+      ? `فترة من ${filterStartDate} إلى ${filterEndDate}` 
+      : filterStartDate 
+      ? `من تاريخ ${filterStartDate}` 
+      : filterEndDate 
+      ? `حتى تاريخ ${filterEndDate}` 
+      : `كامل الفترة (${evalDates.length} أيام)`;
+
+    let title = "";
+    let thHeaders = "";
+    let rowsHtml = "";
+
+    if (memberSortMode === "quran") {
+      title = `تقرير تقييم ورد القرآن الكريم (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الرقم</th>
+        <th>اسم العضو</th>
+        <th>نسبة إنجاز القرآن (%)</th>
+        <th>الورد القرآني المختار (السور)</th>
+        <th>الأيام المعبأة للقرآن</th>
+        <th>حالة التعبئة في الفترة</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => {
+        const uA = getUserDataForMember(a, userDataMap);
+        const uB = getUserDataForMember(b, userDataMap);
+        const sA = getOverallMemberStats(uA, evalDates);
+        const sB = getOverallMemberStats(uB, evalDates);
+        if (sB.quranPct !== sA.quranPct) return sB.quranPct - sA.quranPct;
+        return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+      });
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+        const surahsText = getMemberQuranSurahsText(uData);
+        const quranDays = evalDates.filter((d) => {
+          const qLog = uData?.quranDailyReading?.find((q: any) => q.date === d);
+          return qLog ? (qLog.completed || (qLog.pages_read || 0) > 0) : false;
+        }).length;
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; color: #b45309; font-size: 14px;">${stats.quranPct}%</td>
+            <td style="text-align: right;">${surahsText}</td>
+            <td style="text-align: center;">${quranDays} من ${evalDates.length} يوم</td>
+            <td style="text-align: center; font-weight: bold; color: ${stats.submittedDaysCount > 0 ? '#15803d' : '#94a3b8'};">
+              ${stats.submittedDaysCount > 0 ? `قام بالتعبئة (${stats.submittedDaysCount} أيام)` : "لم يقم بالتعبئة"}
+            </td>
+          </tr>
+        `;
+      });
+    } else if (memberSortMode === "athkar") {
+      title = `تقرير تقييم ورد الأذكار اليومية (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الرقم</th>
+        <th>اسم العضو</th>
+        <th>نسبة إنجاز الأذكار (%)</th>
+        <th>الأذكار اليومية المحددة والتكرار</th>
+        <th>الأيام المعبأة للأذكار</th>
+        <th>حالة التعبئة في الفترة</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => {
+        const uA = getUserDataForMember(a, userDataMap);
+        const uB = getUserDataForMember(b, userDataMap);
+        const sA = getOverallMemberStats(uA, evalDates);
+        const sB = getOverallMemberStats(uB, evalDates);
+        if (sB.athkarPct !== sA.athkarPct) return sB.athkarPct - sA.athkarPct;
+        return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+      });
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+        const athkarText = getMemberAthkarText(uData);
+        const athkarDays = evalDates.filter((d) => {
+          return uData?.thikrProgress?.some((tp: any) => tp.date === d && (tp.completed || (tp.current_count || 0) > 0));
+        }).length;
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; color: #4338ca; font-size: 14px;">${stats.athkarPct}%</td>
+            <td style="text-align: right;">${athkarText}</td>
+            <td style="text-align: center;">${athkarDays} من ${evalDates.length} يوم</td>
+            <td style="text-align: center; font-weight: bold; color: ${stats.submittedDaysCount > 0 ? '#15803d' : '#94a3b8'};">
+              ${stats.submittedDaysCount > 0 ? `قام بالتعبئة (${stats.submittedDaysCount} أيام)` : "لم يقم بالتعبئة"}
+            </td>
+          </tr>
+        `;
+      });
+    } else if (memberSortMode === "prayer") {
+      title = `تقرير التزام الصلاة على وقتها (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الرقم</th>
+        <th>اسم العضو</th>
+        <th>نسبة التزام الصلاة (%)</th>
+        <th>عدد الصلوات المسجلة في الفترة</th>
+        <th>الأيام المعبأة للصلاة</th>
+        <th>حالة التعبئة في الفترة</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => {
+        const uA = getUserDataForMember(a, userDataMap);
+        const uB = getUserDataForMember(b, userDataMap);
+        const sA = getOverallMemberStats(uA, evalDates);
+        const sB = getOverallMemberStats(uB, evalDates);
+        if (sB.prayerPct !== sA.prayerPct) return sB.prayerPct - sA.prayerPct;
+        return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+      });
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+        let totalCheckedInPeriod = 0;
+        evalDates.forEach((d) => {
+          const pl = uData?.prayerLogs?.find((p: any) => p.date === d);
+          if (pl) {
+            ["fajr", "dhuhr", "asr", "maghrib", "isha"].forEach((k) => {
+              if (pl[k]) totalCheckedInPeriod++;
+            });
+          }
+        });
+        const maxPossible = evalDates.length * 5;
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; color: #047857; font-size: 14px;">${stats.prayerPct}%</td>
+            <td style="text-align: center;">${totalCheckedInPeriod} صلاة من أصل ${maxPossible}</td>
+            <td style="text-align: center;">${evalDates.filter(d => uData?.prayerLogs?.some((p: any) => p.date === d)).length} من ${evalDates.length} يوم</td>
+            <td style="text-align: center; font-weight: bold; color: ${stats.submittedDaysCount > 0 ? '#15803d' : '#94a3b8'};">
+              ${stats.submittedDaysCount > 0 ? `قام بالتعبئة (${stats.submittedDaysCount} أيام)` : "لم يقم بالتعبئة"}
+            </td>
+          </tr>
+        `;
+      });
+    } else if (memberSortMode === "habits") {
+      title = `تقرير تقييم الأخلاق والسنن (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الرقم</th>
+        <th>اسم العضو</th>
+        <th>نسبة إنجاز الأخلاق (%)</th>
+        <th>قائمة الأخلاق والسنن المخصصة</th>
+        <th>الأيام المعبأة للأخلاق</th>
+        <th>حالة التعبئة في الفترة</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => {
+        const uA = getUserDataForMember(a, userDataMap);
+        const uB = getUserDataForMember(b, userDataMap);
+        const sA = getOverallMemberStats(uA, evalDates);
+        const sB = getOverallMemberStats(uB, evalDates);
+        if (sB.habitsPct !== sA.habitsPct) return sB.habitsPct - sA.habitsPct;
+        return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+      });
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+        const habitsText = getMemberHabitsText(uData);
+        const habitDays = evalDates.filter((d) => {
+          return uData?.customHabitProgress?.some((hp: any) => hp.date === d && (hp.completed || (hp.count || 0) > 0));
+        }).length;
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; color: #6b21a8; font-size: 14px;">${stats.habitsPct}%</td>
+            <td style="text-align: right;">${habitsText}</td>
+            <td style="text-align: center;">${habitDays} من ${evalDates.length} يوم</td>
+            <td style="text-align: center; font-weight: bold; color: ${stats.submittedDaysCount > 0 ? '#15803d' : '#94a3b8'};">
+              ${stats.submittedDaysCount > 0 ? `قام بالتعبئة (${stats.submittedDaysCount} أيام)` : "لم يقم بالتعبئة"}
+            </td>
+          </tr>
+        `;
+      });
+    } else if (memberSortMode === "name") {
+      title = `تقرير الأعضاء الأبجدي مع المعدل العام (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الرقم</th>
+        <th>اسم العضو</th>
+        <th>المعدل الإجمالي العام (%)</th>
+        <th>القرآن (%)</th>
+        <th>الأذكار (%)</th>
+        <th>الصلاة (%)</th>
+        <th>الأخلاق (%)</th>
+        <th>الأيام المعبأة</th>
+        <th>حالة التعبئة</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => (a.displayName || "").localeCompare(b.displayName || "", "ar"));
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; background-color: #fef3c7; color: #78350f; font-size: 14px;">${stats.totalAvgPct}%</td>
+            <td style="text-align: center; font-weight: bold; color: #b45309;">${stats.quranPct}%</td>
+            <td style="text-align: center; font-weight: bold; color: #4338ca;">${stats.athkarPct}%</td>
+            <td style="text-align: center; font-weight: bold; color: #047857;">${stats.prayerPct}%</td>
+            <td style="text-align: center; font-weight: bold; color: #6b21a8;">${stats.habitsPct}%</td>
+            <td style="text-align: center;">${stats.submittedDaysCount} من ${evalDates.length} يوم</td>
+            <td style="text-align: center; font-weight: bold; color: ${stats.submittedDaysCount > 0 ? '#15803d' : '#94a3b8'};">
+              ${stats.submittedDaysCount > 0 ? "نشط ✓" : "لم يعبئ"}
+            </td>
+          </tr>
+        `;
+      });
+    } else if (memberSortMode === "totalAvg") {
+      title = `تقرير الترتيب حسب المعدل العام للأعضاء (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الترتيب</th>
+        <th>اسم العضو</th>
+        <th>المعدل العام (%)</th>
+        <th>القرآن (%)</th>
+        <th>الأذكار (%)</th>
+        <th>الصلاة (%)</th>
+        <th>الأخلاق (%)</th>
+        <th>الأيام المعبأة</th>
+        <th>حالة التعبئة</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => {
+        const uA = getUserDataForMember(a, userDataMap);
+        const uB = getUserDataForMember(b, userDataMap);
+        const sA = getOverallMemberStats(uA, evalDates);
+        const sB = getOverallMemberStats(uB, evalDates);
+        if (sB.totalAvgPct !== sA.totalAvgPct) return sB.totalAvgPct - sA.totalAvgPct;
+        return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+      });
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; background-color: #fef3c7; color: #78350f; font-size: 14px;">${stats.totalAvgPct}%</td>
+            <td style="text-align: center; font-weight: bold; color: #b45309;">${stats.quranPct}%</td>
+            <td style="text-align: center; font-weight: bold; color: #4338ca;">${stats.athkarPct}%</td>
+            <td style="text-align: center; font-weight: bold; color: #047857;">${stats.prayerPct}%</td>
+            <td style="text-align: center; font-weight: bold; color: #6b21a8;">${stats.habitsPct}%</td>
+            <td style="text-align: center;">${stats.submittedDaysCount} من ${evalDates.length} يوم</td>
+            <td style="text-align: center; font-weight: bold; color: ${stats.submittedDaysCount > 0 ? '#15803d' : '#94a3b8'};">
+              ${stats.submittedDaysCount > 0 ? "نشط ✓" : "لم يعبئ"}
+            </td>
+          </tr>
+        `;
+      });
+    } else if (memberSortMode === "mostDays") {
+      title = `تقرير الترتيب حسب الأكثر تعبئة للأيام (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الترتيب</th>
+        <th>اسم العضو</th>
+        <th>الأيام المعبأة</th>
+        <th>نسبة الالتزام بالأيام (%)</th>
+        <th>المعدل الإجمالي العام (%)</th>
+        <th>القرآن (%)</th>
+        <th>الأذكار (%)</th>
+        <th>الصلاة (%)</th>
+        <th>الأخلاق (%)</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => {
+        const uA = getUserDataForMember(a, userDataMap);
+        const uB = getUserDataForMember(b, userDataMap);
+        const sA = getOverallMemberStats(uA, evalDates);
+        const sB = getOverallMemberStats(uB, evalDates);
+        if (sB.submittedDaysCount !== sA.submittedDaysCount) return sB.submittedDaysCount - sA.submittedDaysCount;
+        if (sB.totalAvgPct !== sA.totalAvgPct) return sB.totalAvgPct - sA.totalAvgPct;
+        return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+      });
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+        const daysPct = Math.round((stats.submittedDaysCount / Math.max(1, evalDates.length)) * 100);
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; color: #0369a1; font-size: 14px;">${stats.submittedDaysCount} / ${evalDates.length} أَيَّام</td>
+            <td style="text-align: center; font-weight: bold;">${daysPct}%</td>
+            <td style="text-align: center; font-weight: bold; background-color: #fef3c7; color: #78350f;">${stats.totalAvgPct}%</td>
+            <td style="text-align: center; color: #b45309;">${stats.quranPct}%</td>
+            <td style="text-align: center; color: #4338ca;">${stats.athkarPct}%</td>
+            <td style="text-align: center; color: #047857;">${stats.prayerPct}%</td>
+            <td style="text-align: center; color: #6b21a8;">${stats.habitsPct}%</td>
+          </tr>
+        `;
+      });
+    }
+
+    const fullHtml = `
+      <h2 style="text-align: center; color: #0f766e; font-family: sans-serif; margin-bottom: 6px;">${title} 📊</h2>
+      <p style="text-align: center; color: #475569; font-size: 12px; margin-top: 0; margin-bottom: 16px;">تم التصدير بتاريخ: ${isoDate()} (${formatArabicDate(isoDate())})</p>
+      <table>
+        <thead>
+          <tr>${thHeaders}</tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    `;
+
+    const filePrefixMap: Record<string, string> = {
+      quran: "تقرير_معيار_القرآن_الكريم",
+      athkar: "تقرير_معيار_الأذكار_اليومية",
+      prayer: "تقرير_معيار_التزام_الصلاة",
+      habits: "تقرير_معيار_الأخلاق_والسنن",
+      name: "تقرير_الأعضاء_الأبجدي",
+      totalAvg: "تقرير_الأعضاء_المعدل_العام",
+      mostDays: "تقرير_الأعضاء_الأكثر_تعبئة_للأيام",
+    };
+
+    const fileName = `${filePrefixMap[memberSortMode] || "تقرير_التقييم"}_${isoDate()}`;
+    triggerExcelDownload(fullHtml, fileName, "تقرير المعيار");
+  };
+
+  // Generate & Download Detailed Excel / CSV File with distinct columns (All Data)
   const exportToExcel = async () => {
     const uniqueDates = getUniqueSubmissionDates(members, userDataMap, true);
 
@@ -1531,63 +2060,31 @@ function AdminPage() {
       });
     });
 
-    const excelHtml = `
-      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-      <head>
-        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-        <!--[if gte mso 9]>
-        <xml>
-          <x:ExcelWorkbook>
-            <x:ExcelWorksheets>
-              <x:ExcelWorksheet>
-                <x:Name>تقرير المتابعة</x:Name>
-                <x:WorksheetOptions>
-                  <x:DisplayRightToLeft/>
-                </x:WorksheetOptions>
-              </x:ExcelWorksheet>
-            </x:ExcelWorksheets>
-          </x:ExcelWorkbook>
-        </xml>
-        <![endif]-->
-        <style>
-          body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
-          table { border-collapse: collapse; width: 100%; direction: rtl; }
-          th { background-color: #0d9488; color: #ffffff; font-weight: bold; padding: 10px; border: 1px solid #0f766e; text-align: center; }
-        </style>
-      </head>
-      <body dir="rtl">
-        <h2 style="text-align: center; color: #0f766e; font-family: sans-serif;">تقرير متابعة الورد اليومي للأعضاء 📊</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>اسم العضو</th>
-              <th>البريد الإلكتروني</th>
-              <th>التاريخ</th>
-              <th>اليوم</th>
-              <th>ورد القرآن الكريم (%)</th>
-              <th>ورد الأذكار (%)</th>
-              <th>التزام الصلاة (%)</th>
-              <th>الأخلاق والسنن (%)</th>
-              <th>المعدل الإجمالي (%)</th>
-              <th>حالة التعبئة</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${tableRowsHtml}
-          </tbody>
-        </table>
-      </body>
-      </html>
+    const fullHtml = `
+      <h2 style="text-align: center; color: #0f766e; font-family: sans-serif;">تقرير متابعة الورد اليومي الشامل للأعضاء 📊</h2>
+      <p style="text-align: center; color: #475569; font-size: 12px; margin-top: 0; margin-bottom: 16px;">تم التصدير بتاريخ: ${isoDate()} (${formatArabicDate(isoDate())})</p>
+      <table>
+        <thead>
+          <tr>
+            <th>اسم العضو</th>
+            <th>البريد الإلكتروني</th>
+            <th>التاريخ</th>
+            <th>اليوم</th>
+            <th>ورد القرآن الكريم (%)</th>
+            <th>ورد الأذكار (%)</th>
+            <th>التزام الصلاة (%)</th>
+            <th>الأخلاق والسنن (%)</th>
+            <th>المعدل الإجمالي (%)</th>
+            <th>حالة التعبئة</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRowsHtml}
+        </tbody>
+      </table>
     `;
 
-    const blob = new Blob(["\uFEFF" + excelHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `تقرير_متابعة_وردك_اليومي.xls`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    triggerExcelDownload(fullHtml, `تقرير_متابعة_وردك_اليومي_الشامل_${isoDate()}`, "تقرير المتابعة الشامل");
   };
 
   // If user is not Admin yet, show Admin Login Box
@@ -1655,290 +2152,306 @@ function AdminPage() {
         </div>
       </header>
 
-      {/* 1. Add Global Habit Section (Collapsible - Ultra Slim when closed) */}
-      <section className={`mb-3 rounded-2xl border transition-all ${
-        showHabitForm
-          ? "border-amber-300 bg-gradient-to-br from-amber-50/80 to-orange-50/40 p-4 shadow-xs"
-          : "border-amber-200/80 bg-amber-50/40 hover:bg-amber-100/60 p-2 px-3 shadow-2xs"
-      }`}>
-        <div
-          onClick={() => setShowHabitForm(!showHabitForm)}
-          className="flex items-center justify-between cursor-pointer select-none"
-        >
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-amber-600 shrink-0" />
-            <h2 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-              <span>إضافة خُلُق عام ونشره للجميع 🌐</span>
-              {globalHabits.length > 0 && !showHabitForm && (
-                <span className="text-[10px] text-amber-900 font-bold bg-amber-100/80 px-1.5 py-0.2 rounded border border-amber-200">
-                  ({globalHabits.length} منشور)
-                </span>
-              )}
-            </h2>
-          </div>
-          <button
-            type="button"
-            className="px-2.5 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 text-xs font-black transition-all flex items-center gap-1 border border-amber-300/50"
+      {/* 1 & 2. Add Global Habit and Add Global Thikr Sections Side by Side in a Compact Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        {/* 1. Add Global Habit Section (Ultra Slim 2 lines when closed) */}
+        <section className={`rounded-2xl border transition-all ${
+          showHabitForm
+            ? "border-amber-300 bg-gradient-to-br from-amber-50/80 to-orange-50/40 p-3.5 shadow-xs"
+            : "border-amber-200/80 bg-amber-50/40 hover:bg-amber-100/60 p-2.5 px-3 shadow-2xs flex flex-col justify-center"
+        }`}>
+          <div
+            onClick={() => setShowHabitForm(!showHabitForm)}
+            className="flex items-center justify-between cursor-pointer select-none gap-2"
           >
-            <span>{showHabitForm ? "إخفاء ✖" : "+"}</span>
-            {showHabitForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          </button>
-        </div>
-
-        {showHabitForm && (
-          <div className="mt-4 pt-3 border-t border-amber-200/60 animate-in fade-in duration-150">
-            <p className="text-xs text-slate-600 font-medium mb-4">
-              يمكنك هنا إضافة خُلُق أو عمل صالح (مثل: إطعام طعام، صلة الرحم، غض البصر...). وتحديد مدته (هذا الأسبوع فقط، الشهر كامل، أو مدى الحياة).
-            </p>
-
-            <form onSubmit={handleAddGlobalHabit} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">اسم الخُلق أو العمل *</label>
-                <input
-                  type="text"
-                  placeholder="مثال: إطعام طعام / الكلمة الطيبة..."
-                  value={habitName}
-                  onChange={(e) => setHabitName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
-                  required
-                />
+            <div className="flex items-center gap-2 min-w-0">
+              <Sparkles className="h-4 w-4 text-amber-600 shrink-0" />
+              <div className="min-w-0">
+                <h2 className="text-xs font-black text-slate-900 truncate flex items-center gap-1.5">
+                  <span>إضافة خُلُق عام للجميع 🌸</span>
+                  {globalHabits.length > 0 && !showHabitForm && (
+                    <span className="text-[10px] text-amber-900 font-bold bg-amber-100/80 px-1.5 py-0.2 rounded border border-amber-200">
+                      ({globalHabits.length})
+                    </span>
+                  )}
+                </h2>
+                {!showHabitForm && (
+                  <p className="text-[10px] text-slate-500 font-medium truncate">نشر عمل صالح أو خُلق وتحديد مدته</p>
+                )}
               </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">المدة المحددة ⏱️</label>
-                <select
-                  value={habitDuration}
-                  onChange={(e: any) => setHabitDuration(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
-                >
-                  <option value="week">📅 هذا الأسبوع فقط (7 أيام)</option>
-                  <option value="month">🗓️ الشهر كامل (30 يوماً)</option>
-                  <option value="lifetime">♾️ مدى الحياة (مستمر دائماً)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">نوع زهرة الخُلق 🌸</label>
-                <select
-                  value={flowerType}
-                  onChange={(e: any) => setFlowerType(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
-                >
-                  <option value="tulip">🌷 توليب</option>
-                  <option value="jasmine">🌼 ياسمين</option>
-                  <option value="jouri">🌹 جوري</option>
-                  <option value="violet">🪻 بنفسج</option>
-                  <option value="daffodil">🌻 نرجس</option>
-                  <option value="lavender">🪻 لافندر</option>
-                </select>
-              </div>
-
-              <div className="sm:col-span-3">
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">وصف الخُلق والنصيحة المشجعة 📝</label>
-                <input
-                  type="text"
-                  placeholder="مثال: حاول إدخال السرور على مسلم ولو بابتسامة أو كلمة طيبة..."
-                  value={habitDesc}
-                  onChange={(e) => setHabitDesc(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-none focus:border-amber-500"
-                />
-              </div>
-
-              <div className="sm:col-span-3 flex items-center justify-between mt-2">
-                {habitMsg && <span className="text-xs font-bold text-emerald-700">{habitMsg}</span>}
-                <button
-                  type="submit"
-                  disabled={addingHabit}
-                  className="mr-auto px-5 py-2.5 rounded-2xl bg-amber-400 text-slate-950 font-black text-xs shadow-xs hover:bg-amber-300 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 border border-amber-500/40"
-                >
-                  <Plus className="h-4 w-4 text-slate-950" /> {addingHabit ? "جاري النشر..." : "نشر الخُلق للأعضاء"}
-                </button>
-              </div>
-            </form>
+            </div>
+            <button
+              type="button"
+              className="px-2 py-0.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 text-xs font-black transition-all flex items-center gap-1 border border-amber-300/50 shrink-0"
+            >
+              <span>{showHabitForm ? "إخفاء ✖" : "+"}</span>
+              {showHabitForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
           </div>
-        )}
 
-        {/* List of Published Global Habits with Rename/Edit and Delete */}
-        {globalHabits.length > 0 && (
-          <div className="mt-6 border-t border-amber-200/60 pt-4">
-            <h3 className="text-xs font-black text-amber-950 mb-3 flex items-center gap-1.5">
-              <span>🌸 الأخلاق العامة المنشورة حالياً ({globalHabits.length})</span>
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {globalHabits.map((gh) => (
-                <div key={gh.id} className="bg-white/90 p-3 rounded-2xl border border-amber-200 shadow-2xs flex items-center justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <span className="font-extrabold text-xs text-slate-900 truncate">{gh.name}</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300/60">
-                        {gh.duration_type === "lifetime" ? "♾️ مدى الحياة" : gh.duration_type === "month" ? "🗓️ الشهر كامل" : "📅 هذا الأسبوع"}
-                      </span>
-                    </div>
-                    {gh.description && <p className="text-[11px] text-slate-500 truncate">{gh.description}</p>}
+          {showHabitForm && (
+            <div className="mt-3 pt-3 border-t border-amber-200/60 animate-in fade-in duration-150">
+              <p className="text-[11px] text-slate-600 font-medium mb-3">
+                إضافة خُلُق أو عمل صالح (مثل: إطعام طعام، صلة الرحم...) وتحديد مدته وزهرته.
+              </p>
+
+              <form onSubmit={handleAddGlobalHabit} className="space-y-2.5">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">اسم الخُلق أو العمل *</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: إطعام طعام / الكلمة الطيبة..."
+                    value={habitName}
+                    onChange={(e) => setHabitName(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-amber-500"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">المدة المحددة ⏱️</label>
+                    <select
+                      value={habitDuration}
+                      onChange={(e: any) => setHabitDuration(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-[11px] font-bold focus:outline-none focus:border-amber-500"
+                    >
+                      <option value="week">📅 هذا الأسبوع (7 أيام)</option>
+                      <option value="month">🗓️ الشهر كامل (30 يوماً)</option>
+                      <option value="lifetime">♾️ مدى الحياة</option>
+                    </select>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      onClick={() => setEditingHabit({
-                        id: gh.id,
-                        oldName: gh.name,
-                        name: gh.name,
-                        description: gh.description || "",
-                        duration_type: gh.duration_type || "week",
-                        flower_type: gh.flower_type || "tulip",
-                      })}
-                      className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-700 hover:bg-amber-100 hover:text-amber-900 text-[11px] font-bold cursor-pointer transition-colors"
-                      title="إعادة تسمية وتعديل"
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">نوع زهرة الخُلق 🌸</label>
+                    <select
+                      value={flowerType}
+                      onChange={(e: any) => setFlowerType(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-[11px] font-bold focus:outline-none focus:border-amber-500"
                     >
-                      ✏️ تعديل
-                    </button>
-                    <button
-                      onClick={() => handleDeleteGlobalHabit(gh.id, gh.name)}
-                      className="px-2 py-1.5 rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-[11px] font-bold cursor-pointer transition-colors"
-                      title="حذف"
-                    >
-                      🗑️
-                    </button>
+                      <option value="tulip">🌷 توليب</option>
+                      <option value="jasmine">🌼 ياسمين</option>
+                      <option value="jouri">🌹 جوري</option>
+                      <option value="violet">🪻 بنفسج</option>
+                      <option value="daffodil">🌻 نرجس</option>
+                      <option value="lavender">🪻 لافندر</option>
+                    </select>
                   </div>
                 </div>
-              ))}
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">الوصف والنصيحة المشجعة 📝</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: حاول إدخال السرور على مسلم ولو بابتسامة..."
+                    value={habitDesc}
+                    onChange={(e) => setHabitDesc(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  {habitMsg && <span className="text-[11px] font-bold text-emerald-700">{habitMsg}</span>}
+                  <button
+                    type="submit"
+                    disabled={addingHabit}
+                    className="mr-auto px-4 py-2 rounded-xl bg-amber-400 text-slate-950 font-black text-xs shadow-xs hover:bg-amber-300 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 border border-amber-500/40"
+                  >
+                    <Plus className="h-3.5 w-3.5 text-slate-950" /> {addingHabit ? "جاري النشر..." : "نشر الخُلق للأعضاء"}
+                  </button>
+                </div>
+              </form>
             </div>
-          </div>
-        )}
-      </section>
+          )}
 
-      {/* 2. Add Global Athkar Section (Collapsible - Ultra Slim when closed) */}
-      <section className={`mb-3 rounded-2xl border transition-all ${
-        showThikrForm
-          ? "border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-blue-50/40 p-4 shadow-xs"
-          : "border-indigo-200/80 bg-indigo-50/40 hover:bg-indigo-100/60 p-2 px-3 shadow-2xs"
-      }`}>
-        <div
-          onClick={() => setShowThikrForm(!showThikrForm)}
-          className="flex items-center justify-between cursor-pointer select-none"
-        >
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-indigo-600 shrink-0" />
-            <h2 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-              <span>إضافة ورْد ذِكر عام ونشره للجميع 📿</span>
-              {globalAthkar.length > 0 && !showThikrForm && (
-                <span className="text-[10px] text-indigo-900 font-bold bg-indigo-100/80 px-1.5 py-0.2 rounded border border-indigo-200">
-                  ({globalAthkar.length} منشور)
-                </span>
-              )}
-            </h2>
-          </div>
-          <button
-            type="button"
-            className="px-2.5 py-0.5 rounded-md bg-indigo-100 hover:bg-indigo-200 text-indigo-950 text-xs font-black transition-all flex items-center gap-1 border border-indigo-300/50"
-          >
-            <span>{showThikrForm ? "إخفاء ✖" : "+"}</span>
-            {showThikrForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          </button>
-        </div>
-
-        {showThikrForm && (
-          <div className="mt-4 pt-3 border-t border-indigo-200/60 animate-in fade-in duration-150">
-            <p className="text-xs text-slate-600 font-medium mb-4">
-              يمكنك هنا إضافة أذكار وأوراد جماعية (مثل: الصلاة على النبي، استغفار، سبحان الله وبحمده...). وتحديد مدتها والعدد المطلوب.
-            </p>
-
-            <form onSubmit={handleAddGlobalThikr} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">اسم الذِكر *</label>
-                <input
-                  type="text"
-                  placeholder="مثال: الصلاة على النبي صلى الله عليه وسلم..."
-                  value={thikrName}
-                  onChange={(e) => setThikrName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">العدد المطلوب يومياً *</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={thikrCount}
-                  onChange={(e) => setThikrCount(Number(e.target.value))}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">المدة المحددة ⏱️</label>
-                <select
-                  value={thikrDuration}
-                  onChange={(e: any) => setThikrDuration(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="week">📅 هذا الأسبوع فقط (7 أيام)</option>
-                  <option value="month">🗓️ الشهر كامل (30 يوماً)</option>
-                  <option value="lifetime">♾️ مدى الحياة (مستمر دائماً)</option>
-                </select>
-              </div>
-
-              <div className="sm:col-span-3 flex items-center justify-between mt-2">
-                {thikrMsg && <span className="text-xs font-bold text-emerald-700">{thikrMsg}</span>}
-                <button
-                  type="submit"
-                  disabled={addingThikr}
-                  className="mr-auto px-5 py-2.5 rounded-2xl bg-indigo-600 text-white font-black text-xs shadow-xs hover:bg-indigo-700 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
-                >
-                  <Plus className="h-4 w-4 text-white" /> {addingThikr ? "جاري النشر..." : "نشر الذِكر للأعضاء 📿"}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {/* List of Published Global Athkar with Rename/Edit and Delete */}
-        {globalAthkar.length > 0 && (
-          <div className="mt-6 border-t border-indigo-200/60 pt-4">
-            <h3 className="text-xs font-black text-indigo-950 mb-3 flex items-center gap-1.5">
-              <span>📿 الأذكار العامة المنشورة حالياً ({globalAthkar.length})</span>
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {globalAthkar.map((ga) => (
-                <div key={ga.id} className="bg-white/90 p-3 rounded-2xl border border-indigo-200 shadow-2xs flex items-center justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <span className="font-extrabold text-xs text-slate-900 truncate">{ga.name}</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-indigo-100 text-indigo-900 border border-indigo-200">
-                        {ga.target_count || 100} مرة | {ga.duration_scope === "lifetime" ? "♾️ مدى الحياة" : ga.duration_scope === "month" ? "🗓️ الشهر كامل" : "📅 هذا الأسبوع"}
-                      </span>
+          {/* List of Published Global Habits with Rename/Edit and Delete */}
+          {globalHabits.length > 0 && (
+            <div className="mt-3 border-t border-amber-200/60 pt-2.5">
+              <h3 className="text-[11px] font-black text-amber-950 mb-2 flex items-center gap-1.5">
+                <span>🌸 الأخلاق العامة المنشورة ({globalHabits.length})</span>
+              </h3>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                {globalHabits.map((gh) => (
+                  <div key={gh.id} className="bg-white/90 p-2 rounded-xl border border-amber-200 shadow-2xs flex items-center justify-between gap-1.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-extrabold text-[11px] text-slate-900 truncate">{gh.name}</span>
+                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-300/60">
+                          {gh.duration_type === "lifetime" ? "♾️ مستمر" : gh.duration_type === "month" ? "🗓️ شهر" : "📅 أسبوع"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => setEditingHabit({
+                          id: gh.id,
+                          oldName: gh.name,
+                          name: gh.name,
+                          description: gh.description || "",
+                          duration_type: gh.duration_type || "week",
+                          flower_type: gh.flower_type || "tulip",
+                        })}
+                        className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 hover:bg-amber-100 hover:text-amber-900 text-[10px] font-bold cursor-pointer transition-colors"
+                        title="تعديل"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGlobalHabit(gh.id, gh.name)}
+                        className="px-1.5 py-1 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 text-[10px] font-bold cursor-pointer transition-colors"
+                        title="حذف"
+                      >
+                        🗑️
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      onClick={() => setEditingThikr({
-                        id: ga.id,
-                        oldName: ga.name,
-                        name: ga.name,
-                        target_count: ga.target_count || 100,
-                        duration_scope: ga.duration_scope || "week",
-                      })}
-                      className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-700 hover:bg-indigo-100 hover:text-indigo-900 text-[11px] font-bold cursor-pointer transition-colors"
-                      title="إعادة تسمية وتعديل"
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* 2. Add Global Athkar Section (Ultra Slim 2 lines when closed) */}
+        <section className={`rounded-2xl border transition-all ${
+          showThikrForm
+            ? "border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-blue-50/40 p-3.5 shadow-xs"
+            : "border-indigo-200/80 bg-indigo-50/40 hover:bg-indigo-100/60 p-2.5 px-3 shadow-2xs flex flex-col justify-center"
+        }`}>
+          <div
+            onClick={() => setShowThikrForm(!showThikrForm)}
+            className="flex items-center justify-between cursor-pointer select-none gap-2"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Sparkles className="h-4 w-4 text-indigo-600 shrink-0" />
+              <div className="min-w-0">
+                <h2 className="text-xs font-black text-slate-900 truncate flex items-center gap-1.5">
+                  <span>إضافة ورْد ذِكر عام 📿</span>
+                  {globalAthkar.length > 0 && !showThikrForm && (
+                    <span className="text-[10px] text-indigo-900 font-bold bg-indigo-100/80 px-1.5 py-0.2 rounded border border-indigo-200">
+                      ({globalAthkar.length})
+                    </span>
+                  )}
+                </h2>
+                {!showThikrForm && (
+                  <p className="text-[10px] text-slate-500 font-medium truncate">نشر ذكر وأوراد جماعية وتحديد تكرارها</p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="px-2 py-0.5 rounded-md bg-indigo-100 hover:bg-indigo-200 text-indigo-950 text-xs font-black transition-all flex items-center gap-1 border border-indigo-300/50 shrink-0"
+            >
+              <span>{showThikrForm ? "إخفاء ✖" : "+"}</span>
+              {showThikrForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+
+          {showThikrForm && (
+            <div className="mt-3 pt-3 border-t border-indigo-200/60 animate-in fade-in duration-150">
+              <p className="text-[11px] text-slate-600 font-medium mb-3">
+                إضافة أذكار وأوراد جماعية (الصلاة على النبي، استغفار...) وتحديد العدد.
+              </p>
+
+              <form onSubmit={handleAddGlobalThikr} className="space-y-2.5">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">اسم الذِكر *</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: الصلاة على النبي صلى الله عليه وسلم..."
+                    value={thikrName}
+                    onChange={(e) => setThikrName(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">العدد المطلوب يومياً *</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={thikrCount}
+                      onChange={(e) => setThikrCount(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-indigo-500"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">المدة المحددة ⏱️</label>
+                    <select
+                      value={thikrDuration}
+                      onChange={(e: any) => setThikrDuration(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-[11px] font-bold focus:outline-none focus:border-indigo-500"
                     >
-                      ✏️ تعديل
-                    </button>
-                    <button
-                      onClick={() => handleDeleteGlobalThikr(ga.id, ga.name)}
-                      className="px-2 py-1.5 rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-[11px] font-bold cursor-pointer transition-colors"
-                      title="حذف"
-                    >
-                      🗑️
-                    </button>
+                      <option value="week">📅 هذا الأسبوع (7 أيام)</option>
+                      <option value="month">🗓️ الشهر كامل (30 يوماً)</option>
+                      <option value="lifetime">♾️ مدى الحياة</option>
+                    </select>
                   </div>
                 </div>
-              ))}
+
+                <div className="flex items-center justify-between pt-1">
+                  {thikrMsg && <span className="text-[11px] font-bold text-emerald-700">{thikrMsg}</span>}
+                  <button
+                    type="submit"
+                    disabled={addingThikr}
+                    className="mr-auto px-4 py-2 rounded-xl bg-indigo-600 text-white font-black text-xs shadow-xs hover:bg-indigo-700 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Plus className="h-3.5 w-3.5 text-white" /> {addingThikr ? "جاري النشر..." : "نشر الذِكر للأعضاء 📿"}
+                  </button>
+                </div>
+              </form>
             </div>
-          </div>
-        )}
-      </section>
+          )}
+
+          {/* List of Published Global Athkar with Rename/Edit and Delete */}
+          {globalAthkar.length > 0 && (
+            <div className="mt-3 border-t border-indigo-200/60 pt-2.5">
+              <h3 className="text-[11px] font-black text-indigo-950 mb-2 flex items-center gap-1.5">
+                <span>📿 الأذكار العامة المنشورة ({globalAthkar.length})</span>
+              </h3>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                {globalAthkar.map((ga) => (
+                  <div key={ga.id} className="bg-white/90 p-2 rounded-xl border border-indigo-200 shadow-2xs flex items-center justify-between gap-1.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-extrabold text-[11px] text-slate-900 truncate">{ga.name}</span>
+                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-900 border border-indigo-200">
+                          {ga.target_count || 100} مرة | {ga.duration_scope === "lifetime" ? "♾️ مستمر" : ga.duration_scope === "month" ? "🗓️ شهر" : "📅 أسبوع"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => setEditingThikr({
+                          id: ga.id,
+                          oldName: ga.name,
+                          name: ga.name,
+                          target_count: ga.target_count || 100,
+                          duration_scope: ga.duration_scope || "week",
+                        })}
+                        className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 hover:bg-indigo-100 hover:text-indigo-900 text-[10px] font-bold cursor-pointer transition-colors"
+                        title="تعديل"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGlobalThikr(ga.id, ga.name)}
+                        className="px-1.5 py-1 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 text-[10px] font-bold cursor-pointer transition-colors"
+                        title="حذف"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
 
       {/* 3. Registered Members & Daily Results List */}
       <section className="mb-8 rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-sm backdrop-blur">
@@ -1991,9 +2504,9 @@ function AdminPage() {
           <p className="text-center text-xs text-slate-400 py-8 font-bold">لا يوجد أعضاء مسجلين بعد.</p>
         ) : (
           <div className="space-y-5">
-            {/* 🏆 Leaderboard / Top Achievers of the Week (Only visible when toggled) */}
+            {/* 🏆 Leaderboard / Top Achievers of the Selected Period (Only visible when toggled) */}
             {showLeaderboard && (() => {
-              const uniqueDates = getUniqueSubmissionDates(members, userDataMap, dateSortAsc);
+              const uniqueDates = getUniqueSubmissionDates(members, userDataMap, dateSortAsc, filterStartDate, filterEndDate);
               const totalDaysCount = Math.max(1, uniqueDates.length);
 
               const ranked = [...members]
@@ -2033,12 +2546,20 @@ function AdminPage() {
 
               const topThree = rankedWithPositions.filter((item) => item.rank <= 3);
 
+              const periodLabel = filterStartDate && filterEndDate
+                ? `(من ${filterStartDate} إلى ${filterEndDate})`
+                : filterStartDate
+                ? `(من ${filterStartDate})`
+                : filterEndDate
+                ? `(حتى ${filterEndDate})`
+                : `(كامل الأيام: ${totalDaysCount} أيام)`;
+
               return (
                 <div className="rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-500/10 via-amber-100/30 to-yellow-500/10 p-4 shadow-2xs">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <Trophy className="h-5 w-5 text-amber-600" />
-                      <h3 className="text-sm font-black text-slate-900">🏆 أوائل الأسبوع والمتصدرون بالتعبئة</h3>
+                      <h3 className="text-sm font-black text-slate-900">🏆 الثلاثة الأوائل والمتصدرون بالتعبئة {periodLabel}</h3>
                     </div>
                     <span className="text-[10px] font-bold text-amber-900 bg-amber-200/80 px-2.5 py-1 rounded-lg border border-amber-300/60">
                       اضغطي على الاسم لرؤية تفاصيل سبب تصدرها 🔍
@@ -2269,6 +2790,17 @@ function AdminPage() {
                         <Sparkles className="h-3.5 w-3.5 text-purple-700" />
                       </button>
                     )}
+
+                    {/* Dedicated Excel Export Button for currently active criterion */}
+                    <button
+                      type="button"
+                      onClick={exportCurrentCriteriaToExcel}
+                      title="تصدير هذا المعيار كملف إكسل (Excel)"
+                      className="px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-all cursor-pointer flex items-center gap-1 text-[11px] font-black shadow-xs border border-emerald-700 shrink-0"
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">تصدير المعيار</span>
+                    </button>
                   </div>
                 )}
               </div>
@@ -2279,7 +2811,10 @@ function AdminPage() {
               <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-amber-50/70 border border-amber-200/80 rounded-2xl shadow-2xs">
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <span className="font-extrabold text-amber-950 flex items-center gap-1.5">
-                    <Calendar className="h-4 w-4 text-amber-700" />
+                    <span className="flex items-center gap-0.5 text-amber-700">
+                      <ChevronRight className="h-3.5 w-3.5" />
+                      <Calendar className="h-4 w-4" />
+                    </span>
                     تحديد فترة التقييم:
                   </span>
                   <div className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-amber-200 shadow-2xs">
