@@ -3,6 +3,12 @@ import { RotateCcw, X, Check } from "lucide-react";
 import type { ThikrItem, ThikrProgress } from "@/lib/db";
 import { getTodayProgress, incrementToday, resetToday } from "@/lib/athkar";
 
+// Strip Arabic Tashkeel / Diacritics regex
+function stripArabicDiacritics(text: string): string {
+  if (!text) return "";
+  return text.replace(/[\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED]/g, "");
+}
+
 /**
  * Full-screen tasbih counter overlay for a single thikr item.
  * Non-punitive: never blocks — just tracks progress toward target.
@@ -20,6 +26,8 @@ export function TasbihCounter({
 }) {
   const [progress, setProgress] = useState<ThikrProgress | null>(null);
   const [pulse, setPulse] = useState(false);
+
+  const cleanDhikrName = stripArabicDiacritics(item.name);
 
   useEffect(() => {
     let mounted = true;
@@ -82,68 +90,73 @@ export function TasbihCounter({
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-6 py-6 max-w-md mx-auto w-full flex flex-col items-center justify-start sm:justify-center gap-4">
-        {/* Full Dhikr Text Display - Never truncated, fully visible and styled */}
-        <div className="w-full rounded-2xl bg-white/85 p-5 text-center shadow-sm border border-white/60 backdrop-blur-md animate-in fade-in-50 slide-in-from-bottom-5 duration-200">
-          <p className="text-base sm:text-lg font-extrabold text-slate-800 leading-relaxed whitespace-pre-line select-text">
-            {item.name}
+      {/* Main Container - Structured with fixed top text and perfectly centered counter button */}
+      <div className="flex-1 px-6 pt-2 pb-6 max-w-md mx-auto w-full flex flex-col items-center justify-between relative">
+        {/* Full Dhikr Text Display - Top section */}
+        <div className="w-full shrink-0 rounded-2xl bg-white/95 p-4 sm:p-5 text-center shadow-xs border border-white/60 backdrop-blur-md animate-in fade-in-50 slide-in-from-top-2 duration-200">
+          <p className="font-sans text-lg sm:text-xl md:text-2xl font-black text-slate-800 leading-relaxed whitespace-pre-line select-text">
+            {cleanDhikrName}
           </p>
         </div>
 
-        <button
-          onClick={tap}
-          disabled={completed}
-          className="relative aspect-square w-full max-w-[260px] xs:max-w-[300px] select-none rounded-full active:scale-[0.98] transition disabled:opacity-90 shrink-0 mb-4"
-          aria-label="عدّ ذكر"
-        >
-          <svg viewBox="0 0 200 200" className="absolute inset-0 h-full w-full -rotate-90">
-            <circle
-              cx="100"
-              cy="100"
-              r="88"
-              fill="none"
-              stroke="color-mix(in oklch, var(--athkar) 15%, white)"
-              strokeWidth="10"
-            />
-            <circle
-              cx="100"
-              cy="100"
-              r="88"
-              fill="none"
-              stroke="var(--athkar)"
-              strokeWidth="10"
-              strokeLinecap="round"
-              strokeDasharray={2 * Math.PI * 88}
-              strokeDashoffset={2 * Math.PI * 88 * (1 - ratio)}
-              style={{ transition: "stroke-dashoffset 0.2s ease" }}
-            />
-          </svg>
-          <div
-            className={`absolute inset-6 rounded-full grid place-items-center bg-white/85 backdrop-blur shadow-inner transition ${
-              pulse ? "scale-[0.97]" : ""
-            }`}
+        {/* Counter Button - Centered exactly in the viewport middle */}
+        <div className="flex-1 flex flex-col items-center justify-center w-full py-2">
+          <button
+            onClick={tap}
+            disabled={completed}
+            className="relative aspect-square w-full max-w-[240px] xs:max-w-[280px] sm:max-w-[300px] select-none rounded-full active:scale-[0.98] transition disabled:opacity-90 shrink-0 shadow-lg cursor-pointer"
+            aria-label="عدّ ذكر"
           >
-            <div className="text-center">
-              {completed ? (
-                <div className="flex flex-col items-center gap-1">
-                  <Check className="h-10 w-10 text-[color:var(--athkar)]" strokeWidth={3} />
-                  <span className="text-lg font-bold">اكتمل</span>
-                </div>
-              ) : (
-                <>
-                  <div className="text-6xl font-black tabular-nums text-foreground">
-                    {count}
+            <svg viewBox="0 0 200 200" className="absolute inset-0 h-full w-full -rotate-90">
+              <circle
+                cx="100"
+                cy="100"
+                r="88"
+                fill="none"
+                stroke="color-mix(in oklch, var(--athkar) 15%, white)"
+                strokeWidth="10"
+              />
+              <circle
+                cx="100"
+                cy="100"
+                r="88"
+                fill="none"
+                stroke="var(--athkar)"
+                strokeWidth="10"
+                strokeLinecap="round"
+                strokeDasharray={2 * Math.PI * 88}
+                strokeDashoffset={2 * Math.PI * 88 * (1 - ratio)}
+                style={{ transition: "stroke-dashoffset 0.2s ease" }}
+              />
+            </svg>
+            <div
+              className={`absolute inset-6 rounded-full grid place-items-center bg-white/85 backdrop-blur shadow-inner transition ${
+                pulse ? "scale-[0.97]" : ""
+              }`}
+            >
+              <div className="text-center">
+                {completed ? (
+                  <div className="flex flex-col items-center gap-1">
+                    <Check className="h-10 w-10 text-[color:var(--athkar)]" strokeWidth={3} />
+                    <span className="text-lg font-bold text-slate-800">اكتمل الورد</span>
                   </div>
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    من {target}
-                  </div>
-                </>
-              )}
+                ) : (
+                  <>
+                    <div className="text-5xl sm:text-6xl font-black tabular-nums text-foreground">
+                      {count}
+                    </div>
+                    <div className="mt-1 text-xs sm:text-sm text-muted-foreground font-bold">
+                      من {target}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        </button>
+          </button>
+        </div>
 
-        <p className="mt-8 max-w-xs text-center text-sm text-muted-foreground">
+        {/* Bottom hint text */}
+        <p className="shrink-0 max-w-xs text-center text-xs text-muted-foreground font-medium">
           اضغط في أي مكان داخل الدائرة لعدّ التسبيح.
         </p>
       </div>

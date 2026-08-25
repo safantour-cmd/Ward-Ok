@@ -6,7 +6,7 @@ import {
   updateProfile,
   signOut,
 } from "firebase/auth";
-import { doc, setDoc, getDoc } from "firebase/firestore";
+import { doc, setDoc, getDoc, collection, getDocs } from "firebase/firestore";
 import { auth, dbFirestore } from "@/lib/firebase";
 import { pullCloudToLocal, pushLocalToCloud } from "@/lib/cloud-sync";
 
@@ -25,6 +25,7 @@ interface AuthContextType {
   lastSyncedAt: string | null;
   login: (email: string, pass: string) => Promise<void>;
   register: (name: string, email: string, pass: string) => Promise<void>;
+  resetPasswordDirectly: (emailOrQuery: string, newPass: string) => Promise<void>;
   logout: () => Promise<void>;
   triggerSync: () => Promise<void>;
   toggleAdminRole: (passcode?: string) => Promise<boolean>;
@@ -264,6 +265,76 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSyncing(false);
   };
 
+  const resetPasswordDirectly = async (emailOrQuery: string, newPass: string) => {
+    const cleanInput = emailOrQuery.trim().toLowerCase();
+    if (!cleanInput) throw new Error("يرجى إدخال البريد الإلكتروني أو اسم المستخدم.");
+    if (newPass.length < 6) throw new Error("كلمة السر الجديدة يجب أن تكون 6 أحرف أو أرقام على الأقل.");
+
+    setSyncing(true);
+    let userDocFound: any = null;
+    let foundDocId = "";
+    let cleanEmail = cleanInput;
+
+    const accDocId = getAccountDocId(cleanInput);
+    const directSnap = await getDoc(doc(dbFirestore, "users", accDocId)).catch(() => null);
+    if (directSnap && directSnap.exists()) {
+      userDocFound = directSnap.data();
+      foundDocId = accDocId;
+      cleanEmail = userDocFound.email || cleanInput;
+    } else {
+      const usersSnap = await getDocs(collection(dbFirestore, "users")).catch(() => null);
+      if (usersSnap) {
+        for (const docSnap of usersSnap.docs) {
+          const d = docSnap.data();
+          const em = (d.email || "").toLowerCase();
+          const dn = (d.displayName || "").toLowerCase();
+          if (
+            em === cleanInput ||
+            em.startsWith(cleanInput) ||
+            em.includes(cleanInput) ||
+            dn.includes(cleanInput) ||
+            docSnap.id === cleanInput
+          ) {
+            userDocFound = d;
+            foundDocId = docSnap.id;
+            cleanEmail = d.email || cleanInput;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!userDocFound) {
+      setSyncing(false);
+      throw new Error(`لم يتم العثور على حساب مسجل بهذا الاسم أو البريد (${cleanInput}). يرجى التأكد من كتابة البريد بشكل صحيح.`);
+    }
+
+    const targetDocId = foundDocId || getAccountDocId(cleanEmail);
+    await setDoc(
+      doc(dbFirestore, "users", targetDocId),
+      {
+        password: newPass,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    if (userDocFound.uid && userDocFound.uid !== targetDocId) {
+      await setDoc(
+        doc(dbFirestore, "users", userDocFound.uid),
+        {
+          password: newPass,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+
+    // Auto log in with the new password
+    await login(cleanEmail, newPass);
+    setSyncing(false);
+  };
+
   const logout = async () => {
     localStorage.removeItem("app_account_session");
     setCurrentUser(null);
@@ -368,6 +439,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         lastSyncedAt,
         login,
         register,
+        resetPasswordDirectly,
         logout,
         triggerSync,
         toggleAdminRole,

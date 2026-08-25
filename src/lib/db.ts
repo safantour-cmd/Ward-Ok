@@ -166,6 +166,16 @@ export interface QuranDailyReading {
   pages_read: number;
 }
 
+/** Daily Nafahat Log (Sunnahs + Salawat) */
+export interface NafahatDailyLog {
+  id?: number;
+  date: string; // yyyy-mm-dd
+  regular_sunnah_ids: string[];
+  rare_sunnah_ratings: Record<string, number>;
+  salawat_count: number;
+  selected_formula_id?: number;
+}
+
 class WardDatabase extends Dexie {
   weekly_quran_selection!: Table<WeeklyQuranSelection, number>;
   daily_quran_selection!: Table<DailyQuranSelection, number>;
@@ -185,6 +195,7 @@ class WardDatabase extends Dexie {
   custom_habit_monthly_evaluation!: Table<CustomHabitMonthlyEvaluation, number>;
   wisdom_quotes!: Table<WisdomQuote, number>;
   prayer_logs!: Table<PrayerLog, number>;
+  nafahat_logs!: Table<NafahatDailyLog, number>;
 
   constructor() {
     super("ward_db");
@@ -213,6 +224,9 @@ class WardDatabase extends Dexie {
     });
     this.version(4).stores({
       prayer_logs: "++id, &date",
+    });
+    this.version(5).stores({
+      nafahat_logs: "++id, &date",
     });
   }
 }

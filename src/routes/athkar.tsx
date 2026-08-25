@@ -92,7 +92,11 @@ function AthkarScreen() {
     
     return days.map((d) => {
       const dayProgress = pRows.filter((r) => r.date === d);
-      const completedCount = dayProgress.filter((r) => r.completed).length;
+      const completedCount = dayProgress.filter((r) => {
+        if (r.completed) return true;
+        const it = allItems.find((item) => item.id === r.thikr_item_id);
+        return it && (r.current_count || 0) >= it.target_count;
+      }).length;
       const ratio = completedCount / allItems.length;
       return { date: d, ratio };
     });
@@ -171,7 +175,11 @@ function AthkarScreen() {
       const dayProgress = monthProgressRows.filter(
         (r) => r.date === c.iso && activeIds.has(r.thikr_item_id)
       );
-      const completedCount = dayProgress.filter((r) => r.completed).length;
+      const completedCount = dayProgress.filter((r) => {
+        if (r.completed) return true;
+        const it = items.find((item) => item.id === r.thikr_item_id);
+        return it && (r.current_count || 0) >= it.target_count;
+      }).length;
       out[c.iso] = completedCount / items.length;
     }
     return out;

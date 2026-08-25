@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as QuranRouteImport } from './routes/quran'
 import { Route as HabitsRouteImport } from './routes/habits'
+import { Route as NafahatRouteImport } from './routes/nafahat'
 import { Route as AthkarRouteImport } from './routes/athkar'
 import { Route as PrayersRouteImport } from './routes/prayers'
 import { Route as AdminRouteImport } from './routes/admin'
@@ -31,6 +32,11 @@ const QuranRoute = QuranRouteImport.update({
 const HabitsRoute = HabitsRouteImport.update({
   id: '/habits',
   path: '/habits',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NafahatRoute = NafahatRouteImport.update({
+  id: '/nafahat',
+  path: '/nafahat',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AthkarRoute = AthkarRouteImport.update({
@@ -59,6 +65,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRoute
   '/athkar': typeof AthkarRoute
   '/habits': typeof HabitsRoute
+  '/nafahat': typeof NafahatRoute
   '/prayers': typeof PrayersRoute
   '/quran': typeof QuranRouteWithChildren
   '/quran/read/$surahId': typeof QuranReadSurahIdRoute
@@ -68,6 +75,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminRoute
   '/athkar': typeof AthkarRoute
   '/habits': typeof HabitsRoute
+  '/nafahat': typeof NafahatRoute
   '/prayers': typeof PrayersRoute
   '/quran': typeof QuranRouteWithChildren
   '/quran/read/$surahId': typeof QuranReadSurahIdRoute
@@ -78,21 +86,23 @@ export interface FileRoutesById {
   '/admin': typeof AdminRoute
   '/athkar': typeof AthkarRoute
   '/habits': typeof HabitsRoute
+  '/nafahat': typeof NafahatRoute
   '/prayers': typeof PrayersRoute
   '/quran': typeof QuranRouteWithChildren
   '/quran/read/$surahId': typeof QuranReadSurahIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/admin' | '/athkar' | '/habits' | '/prayers' | '/quran' | '/quran/read/$surahId'
+  fullPaths: '/' | '/admin' | '/athkar' | '/habits' | '/nafahat' | '/prayers' | '/quran' | '/quran/read/$surahId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/athkar' | '/habits' | '/prayers' | '/quran' | '/quran/read/$surahId'
+  to: '/' | '/admin' | '/athkar' | '/habits' | '/nafahat' | '/prayers' | '/quran' | '/quran/read/$surahId'
   id:
     | '__root__'
     | '/'
     | '/admin'
     | '/athkar'
     | '/habits'
+    | '/nafahat'
     | '/prayers'
     | '/quran'
     | '/quran/read/$surahId'
@@ -103,6 +113,7 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRoute
   AthkarRoute: typeof AthkarRoute
   HabitsRoute: typeof HabitsRoute
+  NafahatRoute: typeof NafahatRoute
   PrayersRoute: typeof PrayersRoute
   QuranRoute: typeof QuranRouteWithChildren
 }
@@ -128,6 +139,13 @@ declare module '@tanstack/react-router' {
       path: '/habits'
       fullPath: '/habits'
       preLoaderRoute: typeof HabitsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/nafahat': {
+      id: '/nafahat'
+      path: '/nafahat'
+      fullPath: '/nafahat'
+      preLoaderRoute: typeof NafahatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/athkar': {
@@ -176,6 +194,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRoute,
   AthkarRoute: AthkarRoute,
   HabitsRoute: HabitsRoute,
+  NafahatRoute: NafahatRoute,
   PrayersRoute: PrayersRoute,
   QuranRoute: QuranRouteWithChildren,
 }

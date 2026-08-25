@@ -10,7 +10,8 @@ import {
   type ThikrItem,
   type ThikrGroup,
   type CustomHabit,
-  type DailyQuranSelection
+  type DailyQuranSelection,
+  type NafahatDailyLog
 } from "./db";
 
 let quotaExceededCooldownUntil = 0;
@@ -54,13 +55,15 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
     const quranSurahState = await db.quran_surah_state.toArray();
     const dailyQuranSelection = await db.daily_quran_selection.toArray();
     const prayerLogs = await db.prayer_logs.toArray();
+    const nafahatLogs = await db.nafahat_logs.toArray();
 
     // SAFETY GUARD: Never overwrite non-empty cloud data with an empty local dataset
     const isLocalEmpty =
       thikrProgress.length === 0 &&
       customHabitProgress.length === 0 &&
       quranDailyReading.length === 0 &&
-      prayerLogs.length === 0;
+      prayerLogs.length === 0 &&
+      nafahatLogs.length === 0;
 
     if (isLocalEmpty) {
       const existingSnap = await getDoc(doc(dbFirestore, "user_data", userId)).catch((err: any) => {
@@ -76,7 +79,8 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
           (exData.prayerLogs && exData.prayerLogs.length > 0) ||
           (exData.thikrProgress && exData.thikrProgress.length > 0) ||
           (exData.customHabitProgress && exData.customHabitProgress.length > 0) ||
-          (exData.quranDailyReading && exData.quranDailyReading.length > 0)
+          (exData.quranDailyReading && exData.quranDailyReading.length > 0) ||
+          (exData.nafahatLogs && exData.nafahatLogs.length > 0)
         ) {
           console.warn("Prevented overwriting non-empty cloud data with empty local state.");
           return false;
@@ -95,6 +99,7 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
         quranSurahState,
         dailyQuranSelection,
         prayerLogs,
+        nafahatLogs,
         updatedAt: new Date().toISOString(),
       })
     );
@@ -298,6 +303,41 @@ function mergeDailyQuranSelectionList(local: DailyQuranSelection[], cloud: Daily
   return Array.from(map.values());
 }
 
+function mergeNafahatLogsList(local: NafahatDailyLog[], cloud: NafahatDailyLog[]): NafahatDailyLog[] {
+  const map = new Map<string, NafahatDailyLog>();
+  cloud.forEach((p) => {
+    if (p.date) {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(p.date, copy);
+    }
+  });
+  local.forEach((p) => {
+    if (!p.date) return;
+    const existing = map.get(p.date);
+    if (existing) {
+      // Merge regular sunnah ids union
+      const regularUnion = Array.from(new Set([...(existing.regular_sunnah_ids || []), ...(p.regular_sunnah_ids || [])]));
+      existing.regular_sunnah_ids = regularUnion;
+      // Merge rare sunnah ratings (pick max rating)
+      const rareCombined = { ...(existing.rare_sunnah_ratings || {}) };
+      if (p.rare_sunnah_ratings) {
+        Object.entries(p.rare_sunnah_ratings).forEach(([k, v]) => {
+          rareCombined[k] = Math.max(rareCombined[k] || 0, v || 0);
+        });
+      }
+      existing.rare_sunnah_ratings = rareCombined;
+      // Max salawat count
+      existing.salawat_count = Math.max(existing.salawat_count || 0, p.salawat_count || 0);
+    } else {
+      const copy = { ...p };
+      delete copy.id;
+      map.set(p.date, copy);
+    }
+  });
+  return Array.from(map.values());
+}
+
 function mergeGenericItems<T extends { id?: number; global_id?: string; name?: string }>(local: T[], cloud: T[]): T[] {
   const localByGlobalId = new Map<string, T>();
   const localByName = new Map<string, T>();
@@ -446,8 +486,10 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
     const localQuranSurahState = await db.quran_surah_state.toArray();
     const localDailyQuranSelection = await db.daily_quran_selection.toArray();
     const localPrayerLogs = await db.prayer_logs.toArray();
+    const localNafahatLogs = await db.nafahat_logs.toArray();
 
     const mergedPrayerLogs = mergePrayerLogsList(localPrayerLogs, Array.isArray(parsed.prayerLogs) ? parsed.prayerLogs : []);
+    const mergedNafahatLogs = mergeNafahatLogsList(localNafahatLogs, Array.isArray(parsed.nafahatLogs) ? parsed.nafahatLogs : []);
     const mergedThikrProgress = mergeThikrProgressList(localThikrProgress, Array.isArray(parsed.thikrProgress) ? parsed.thikrProgress : []);
     const mergedCustomHabitProgress = mergeCustomHabitProgressList(localCustomHabitProgress, Array.isArray(parsed.customHabitProgress) ? parsed.customHabitProgress : []);
     const mergedQuranDailyReading = mergeQuranDailyReadingList(localQuranDailyReading, Array.isArray(parsed.quranDailyReading) ? parsed.quranDailyReading : []);
@@ -468,6 +510,7 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
       db.quran_surah_state,
       db.daily_quran_selection,
       db.prayer_logs,
+      db.nafahat_logs,
     ], async () => {
       await db.thikr_items.clear();
       await db.thikr_items.bulkAdd(mergedThikrItems);
@@ -495,6 +538,9 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
 
       await db.prayer_logs.clear();
       await db.prayer_logs.bulkAdd(mergedPrayerLogs);
+
+      await db.nafahat_logs.clear();
+      await db.nafahat_logs.bulkAdd(mergedNafahatLogs);
     });
 
     // Push merged state back to cloud so cloud gets any local additions

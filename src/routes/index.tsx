@@ -24,6 +24,7 @@ import {
   CloudCheck,
   CloudUpload,
   ShieldCheck,
+  Palmtree,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -116,6 +117,18 @@ export function Home() {
     const keys = ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const;
     const done = keys.filter((k) => pLog[k]).length;
     return Math.round((done / 5) * 100);
+  }, [activeDate]) ?? 0;
+
+  // Reactive Nafahat progress for active date
+  const nafahatPct = useLiveQuery(async () => {
+    if (!db) return 0;
+    const nLog = await db.nafahat_logs.where("date").equals(activeDate).first();
+    if (!nLog) return 0;
+    const regularDone = (nLog.regular_sunnah_ids || []).length;
+    const salawat = nLog.salawat_count || 0;
+    const sunnahRatio = Math.min(1, regularDone / 5);
+    const salawatRatio = Math.min(1, salawat / 100);
+    return Math.round(((sunnahRatio + salawatRatio) / 2) * 100);
   }, [activeDate]) ?? 0;
 
   const [unreadCount, setUnreadCount] = useState(0);
@@ -574,12 +587,13 @@ export function Home() {
           </div>
         )}
 
-        <div className="grid w-full grid-cols-2 sm:grid-cols-4 gap-2.5">
-          {/* Order in DOM = right→left in RTL: Quran, Athkar, Prayers, Habits */}
+        <div className="grid w-full grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5">
+          {/* Order in DOM = right→left in RTL: Quran, Athkar, Prayers, Habits, Nafahat */}
           <HomeTile to="/quran" label="الورد القرآني" Icon={BookOpen} variant="quran" pct={quranPct} searchDate={selectedDate || undefined} />
           <HomeTile to="/athkar" label="ورد الأذكار" Icon={CircleDot} variant="athkar" pct={athkarPct} searchDate={selectedDate || undefined} />
           <HomeTile to="/prayers" label="الصلاة على وقتها" Icon={Clock} variant="prayers" pct={prayersPct} searchDate={selectedDate || undefined} />
           <HomeTile to="/habits" label="الأخلاق والأفعال" Icon={Award} variant="habits" pct={habitsPct} searchDate={selectedDate || undefined} />
+          <HomeTile to="/nafahat" label="نفحات ربيعية" Icon={Palmtree} variant="nafahat" pct={nafahatPct} searchDate={selectedDate || undefined} />
         </div>
 
         {/* History & Interactive Chart Section */}
@@ -1036,10 +1050,10 @@ function HomeTile({
   pct,
   searchDate,
 }: {
-  to: "/quran" | "/athkar" | "/prayers" | "/habits";
+  to: "/quran" | "/athkar" | "/prayers" | "/habits" | "/nafahat";
   label: string;
   Icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  variant: "quran" | "athkar" | "prayers" | "habits";
+  variant: "quran" | "athkar" | "prayers" | "habits" | "nafahat";
   pct: number;
   searchDate?: string;
 }) {

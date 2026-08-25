@@ -1,14 +1,27 @@
 import React, { useState, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { collection, getDocs, doc, getDoc, onSnapshot } from "firebase/firestore";
+import { collection, getDocs, doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
 import { dbFirestore } from "@/lib/firebase";
 import { setQuotaExceededCooldown } from "@/lib/cloud-sync";
 import { useAuth, getAccountDocId } from "@/context/AuthContext";
 import { createGlobalHabit, updateGlobalHabit, deleteGlobalHabit } from "@/lib/habits";
 import { createGlobalThikr, updateGlobalThikr, deleteGlobalThikr } from "@/lib/athkar";
+import {
+  type GlobalHadayaItem,
+  type SalawatFormula,
+  DEFAULT_RARE_SUNNAHS,
+  PROPHETIC_GIFT_PRESETS,
+  subscribeGlobalHadaya,
+  createGlobalHadaya,
+  updateGlobalHadaya,
+  deleteGlobalHadaya,
+  subscribeGlobalSalawatFormulas,
+} from "@/lib/nafahat";
+import { HadayaManagerModal } from "@/components/HadayaManagerModal";
+import { SalawatFormulaManagerModal } from "@/components/SalawatFormulaManagerModal";
 import { isoDate, formatArabicDate, arabicMonthYear } from "@/lib/date-utils";
 import { totalPagesFor, surahName } from "@/lib/quran-text";
-import { ShieldCheck, Users, Download, Plus, Sparkles, Lock, ArrowRight, CheckCircle2, Clock, BookOpen, CircleDot, Award, Calendar, RefreshCw, Edit2, Trash2, ChevronDown, ChevronUp, Eye, EyeOff, Trophy, Filter, Heart, CalendarCheck, CalendarDays, Search, X, Layers, ListFilter, Tag, FileSpreadsheet, ChevronRight } from "lucide-react";
+import { ShieldCheck, Users, Download, Plus, Sparkles, Lock, ArrowRight, CheckCircle2, Clock, BookOpen, CircleDot, Award, Calendar, RefreshCw, Edit2, Trash2, ChevronDown, ChevronUp, Eye, EyeOff, Trophy, Filter, Heart, CalendarCheck, CalendarDays, Search, X, Layers, ListFilter, Tag, FileSpreadsheet, ChevronRight, Gift, Key, KeyRound, Check } from "lucide-react";
 
 export const Route = createFileRoute("/admin")({
   component: AdminPage,
@@ -33,6 +46,7 @@ interface UserCloudData {
   customHabits?: any[];
   customHabitProgress?: any[];
   progressRows?: any[];
+  nafahatLogs?: any[];
   updatedAt?: string;
 }
 
@@ -183,11 +197,32 @@ async function loadSingleMemberCloudData(m: UserProfileDoc): Promise<UserCloudDa
 }
 
 function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
-  if (!uData) return { quranPct: 0, athkarPct: 0, prayerPct: 0, habitsPct: 0, totalAvg: 0 };
+  if (!uData) {
+    return {
+      quranPct: 0,
+      athkarPct: 0,
+      prayerPct: 0,
+      habitsPct: 0,
+      totalAvg: 0,
+      salawatCount: 0,
+      salawatPct: 0,
+      sunnahDoneCount: 0,
+      hadayaRevivedCount: 0,
+      sunnahPct: 0,
+    };
+  }
   if (!targetDate) {
     const s = getMemberStats(uData);
     const totalAvg = Math.round((s.quranPct + s.athkarPct + s.prayerPct + s.habitsPct) / 4);
-    return { ...s, totalAvg };
+    return {
+      ...s,
+      totalAvg,
+      salawatCount: 0,
+      salawatPct: 0,
+      sunnahDoneCount: 0,
+      hadayaRevivedCount: 0,
+      sunnahPct: 0,
+    };
   }
 
   // 1. Quran % on targetDate
@@ -201,7 +236,18 @@ function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
 
   // 2. Athkar % on targetDate
   let athkarPct = 0;
-  const thikrItems = uData.thikrItems && Array.isArray(uData.thikrItems) ? uData.thikrItems : [];
+  let thikrItems = uData.thikrItems && Array.isArray(uData.thikrItems) ? uData.thikrItems : [];
+  if (thikrItems.length === 0 && uData.thikrProgress && Array.isArray(uData.thikrProgress)) {
+    const dayProg = uData.thikrProgress.filter((tp: any) => tp.date === targetDate);
+    if (dayProg.length > 0) {
+      thikrItems = dayProg.map((tp: any) => ({
+        id: tp.thikr_item_id || tp.item_id || tp.id,
+        target_count: tp.target_count || 100,
+        text: tp.thikr_text || tp.text || tp.name || "ذِكر",
+      }));
+    }
+  }
+
   if (thikrItems.length > 0) {
     let sumThikrPct = 0;
     let counted = 0;
@@ -210,10 +256,13 @@ function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
       let curr = 0;
       let isDone = false;
       if (uData.thikrProgress && Array.isArray(uData.thikrProgress)) {
-        const prog = uData.thikrProgress.find((tp: any) => tp.thikr_item_id === item.id && tp.date === targetDate);
+        const prog = uData.thikrProgress.find((tp: any) => 
+          (tp.thikr_item_id === item.id || tp.item_id === item.id || tp.id === item.id || (tp.thikr_text && item.text && tp.thikr_text === item.text)) && 
+          tp.date === targetDate
+        );
         if (prog) {
           curr = prog.current_count || 0;
-          isDone = prog.completed || false;
+          isDone = Boolean(prog.completed) || curr >= target;
           if (curr > 0 || isDone) counted++;
         }
       }
@@ -262,8 +311,39 @@ function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
     }
   }
 
+  // 5. Nafahat (Salawat and Sunnahs/Hadaya) on targetDate
+  let salawatCount = 0;
+  let salawatPct = 0;
+  let sunnahDoneCount = 0;
+  let hadayaRevivedCount = 0;
+  let sunnahPct = 0;
+
+  if (uData.nafahatLogs && Array.isArray(uData.nafahatLogs)) {
+    const nLog = uData.nafahatLogs.find((n: any) => n.date === targetDate);
+    if (nLog) {
+      salawatCount = nLog.salawat_count || 0;
+      salawatPct = Math.min(100, Math.round((salawatCount / 100) * 100));
+      sunnahDoneCount = Array.isArray(nLog.regular_sunnah_ids) ? nLog.regular_sunnah_ids.length : 0;
+      hadayaRevivedCount = nLog.rare_sunnah_ratings && typeof nLog.rare_sunnah_ratings === "object"
+        ? Object.keys(nLog.rare_sunnah_ratings).length
+        : 0;
+      sunnahPct = Math.min(100, Math.round((sunnahDoneCount / 8) * 100));
+    }
+  }
+
   const totalAvg = Math.round((quranPct + athkarPct + prayerPct + habitsPct) / 4);
-  return { quranPct, athkarPct, prayerPct, habitsPct, totalAvg };
+  return {
+    quranPct,
+    athkarPct,
+    prayerPct,
+    habitsPct,
+    totalAvg,
+    salawatCount,
+    salawatPct,
+    sunnahDoneCount,
+    hadayaRevivedCount,
+    sunnahPct,
+  };
 }
 
 function hasMemberSubmittedOnDate(uData?: UserCloudData, targetDate?: string): boolean {
@@ -272,14 +352,30 @@ function hasMemberSubmittedOnDate(uData?: UserCloudData, targetDate?: string): b
   if (uData.thikrProgress && uData.thikrProgress.some((t: any) => t.date === targetDate && ((t.current_count || 0) > 0 || t.completed))) return true;
   if (uData.customHabitProgress && uData.customHabitProgress.some((h: any) => h.date === targetDate && ((h.count || 0) > 0 || h.completed))) return true;
   if (uData.quranDailyReading && uData.quranDailyReading.some((q: any) => q.date === targetDate && ((q.pages_read || 0) > 0 || q.completed))) return true;
+  if (uData.nafahatLogs && uData.nafahatLogs.some((n: any) => n.date === targetDate && ((n.salawat_count || 0) > 0 || (n.regular_sunnah_ids && n.regular_sunnah_ids.length > 0) || (n.rare_sunnah_ratings && Object.keys(n.rare_sunnah_ratings).length > 0)))) return true;
 
   const stats = getMemberStatsForDate(uData, targetDate);
-  return stats.totalAvg > 0 || stats.quranPct > 0 || stats.athkarPct > 0 || stats.prayerPct > 0 || stats.habitsPct > 0;
+  return stats.totalAvg > 0 || stats.quranPct > 0 || stats.athkarPct > 0 || stats.prayerPct > 0 || stats.habitsPct > 0 || stats.salawatCount > 0 || stats.sunnahDoneCount > 0 || stats.hadayaRevivedCount > 0;
 }
 
 function getOverallMemberStats(uData: UserCloudData | undefined, uniqueDates: string[]) {
   if (!uData || !uniqueDates || uniqueDates.length === 0) {
-    return { quranPct: 0, athkarPct: 0, prayerPct: 0, habitsPct: 0, totalAvgPct: 0, submittedDaysCount: 0 };
+    return {
+      quranPct: 0,
+      athkarPct: 0,
+      prayerPct: 0,
+      habitsPct: 0,
+      totalAvgPct: 0,
+      submittedDaysCount: 0,
+      sumSalawat: 0,
+      salawatPct: 0,
+      avgSalawatPerDay: 0,
+      maxSalawatDay: 0,
+      sumSunnahDone: 0,
+      sumHadayaRevived: 0,
+      sunnahPct: 0,
+      activeNafahatDays: 0,
+    };
   }
 
   let submittedDaysCount = 0;
@@ -287,6 +383,13 @@ function getOverallMemberStats(uData: UserCloudData | undefined, uniqueDates: st
   let sumAthkar = 0;
   let sumPrayer = 0;
   let sumHabits = 0;
+  let sumSalawat = 0;
+  let sumSalawatPct = 0;
+  let maxSalawatDay = 0;
+  let sumSunnahDone = 0;
+  let sumHadayaRevived = 0;
+  let sumSunnahPct = 0;
+  let activeNafahatDays = 0;
 
   for (const dateStr of uniqueDates) {
     const isSubmitted = hasMemberSubmittedOnDate(uData, dateStr);
@@ -298,6 +401,15 @@ function getOverallMemberStats(uData: UserCloudData | undefined, uniqueDates: st
     sumAthkar += s.athkarPct;
     sumPrayer += s.prayerPct;
     sumHabits += s.habitsPct;
+    sumSalawat += s.salawatCount;
+    sumSalawatPct += s.salawatPct;
+    if (s.salawatCount > maxSalawatDay) maxSalawatDay = s.salawatCount;
+    sumSunnahDone += s.sunnahDoneCount;
+    sumHadayaRevived += s.hadayaRevivedCount;
+    sumSunnahPct += s.sunnahPct;
+    if (s.salawatCount > 0 || s.sunnahDoneCount > 0 || s.hadayaRevivedCount > 0) {
+      activeNafahatDays++;
+    }
   }
 
   const totalDays = Math.max(1, uniqueDates.length);
@@ -307,6 +419,9 @@ function getOverallMemberStats(uData: UserCloudData | undefined, uniqueDates: st
   const prayerPct = Math.round(sumPrayer / totalDays);
   const habitsPct = Math.round(sumHabits / totalDays);
   const totalAvgPct = Math.round((quranPct + athkarPct + prayerPct + habitsPct) / 4);
+  const salawatPct = Math.round(sumSalawatPct / totalDays);
+  const avgSalawatPerDay = Math.round(sumSalawat / totalDays);
+  const sunnahPct = Math.round(sumSunnahPct / totalDays);
 
   return {
     quranPct,
@@ -315,6 +430,14 @@ function getOverallMemberStats(uData: UserCloudData | undefined, uniqueDates: st
     habitsPct,
     totalAvgPct,
     submittedDaysCount,
+    sumSalawat,
+    salawatPct,
+    avgSalawatPerDay,
+    maxSalawatDay,
+    sumSunnahDone,
+    sumHadayaRevived,
+    sunnahPct,
+    activeNafahatDays,
   };
 }
 
@@ -385,6 +508,9 @@ function getUniqueSubmissionDates(
     }
     if (uData.quranDailyReading && Array.isArray(uData.quranDailyReading)) {
       uData.quranDailyReading.forEach((q: any) => q.date && q.date <= todayStr && dates.add(q.date));
+    }
+    if (uData.nafahatLogs && Array.isArray(uData.nafahatLogs)) {
+      uData.nafahatLogs.forEach((n: any) => n.date && n.date <= todayStr && dates.add(n.date));
     }
   });
 
@@ -480,7 +606,20 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
   }
 
   // 2. Athkar
-  const thikrItemList = uData?.thikrItems || [];
+  const thikrItemList = (uData?.thikrItems && uData.thikrItems.length > 0)
+    ? uData.thikrItems
+    : Array.from(
+        new Map(
+          (uData?.thikrProgress || []).map((tp: any) => [
+            tp.thikr_item_id || tp.item_id || tp.id || tp.thikr_text || tp.text || "ذِكر",
+            {
+              id: tp.thikr_item_id || tp.item_id || tp.id,
+              text: tp.thikr_text || tp.text || tp.name || "ذِكر",
+              target_count: tp.target_count || 100,
+            },
+          ])
+        ).values()
+      );
 
   // 3. Prayer
   const prayerLogs = uData?.prayerLogs || [];
@@ -497,7 +636,8 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
         ...(prayerLogs || []).map((p: any) => p.date),
         ...(uData?.thikrProgress || []).map((t: any) => t.date),
         ...(uData?.customHabitProgress || []).map((h: any) => h.date),
-        ...(uData?.quranDailyReading || []).map((q: any) => q.date)
+        ...(uData?.quranDailyReading || []).map((q: any) => q.date),
+        ...(uData?.nafahatLogs || []).map((n: any) => n.date)
       ])).filter(Boolean).filter((d) => d <= todayStr).sort((a, b) => a.localeCompare(b));
 
   const showAll = !activeCategory || activeCategory === "mostDays" || activeCategory === "name" || activeCategory === "totalAvg";
@@ -506,7 +646,7 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
     <div className="space-y-4 p-4 bg-amber-50/50 rounded-2xl border border-amber-300 my-2 text-right dir-rtl animate-in fade-in duration-150 shadow-sm">
 
       {showAll && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-[10px]">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-center text-[10px]">
           <div className="bg-white p-2 rounded-xl border border-amber-200 shadow-2xs">
             <span className="text-amber-800 font-bold flex items-center justify-center gap-1">
               <BookOpen className="h-3 w-3 text-amber-700" /> القرآن الكريم
@@ -530,6 +670,18 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
               <Award className="h-3 w-3 text-purple-700" /> الأخلاق والسنن
             </span>
             <span className="font-black text-purple-700 text-xs tabular-nums">{s.habitsPct}%</span>
+          </div>
+          <div className="bg-white p-2 rounded-xl border border-rose-200 shadow-2xs">
+            <span className="text-rose-800 font-bold flex items-center justify-center gap-1">
+              🌸 الصلاة على النبي
+            </span>
+            <span className="font-black text-rose-700 text-xs tabular-nums">{s.sumSalawat.toLocaleString()}</span>
+          </div>
+          <div className="bg-white p-2 rounded-xl border border-teal-200 shadow-2xs">
+            <span className="text-teal-800 font-bold flex items-center justify-center gap-1">
+              🌿 السنن والهدايا
+            </span>
+            <span className="font-black text-teal-700 text-xs tabular-nums">{s.sunnahPct}%</span>
           </div>
         </div>
       )}
@@ -639,10 +791,13 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
                           let curr = 0;
                           let isDone = false;
                           if (uData?.thikrProgress && Array.isArray(uData.thikrProgress)) {
-                            const prog = uData.thikrProgress.find((tp: any) => tp.thikr_item_id === item.id && tp.date === dateStr);
+                            const prog = uData.thikrProgress.find((tp: any) => 
+                              (tp.thikr_item_id === item.id || tp.item_id === item.id || tp.id === item.id || (tp.thikr_text && item.text && tp.thikr_text === item.text)) && 
+                              tp.date === dateStr
+                            );
                             if (prog) {
                               curr = prog.current_count || 0;
-                              isDone = prog.completed || curr >= target;
+                              isDone = Boolean(prog.completed) || curr >= target;
                             }
                           }
                           const name = item.text || item.name || "ذِكر";
@@ -767,6 +922,110 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
             </div>
           ) : (
             <p className="text-[10px] text-slate-500 font-medium">لم يتم إضافة أخلاق أو سنن بعد.</p>
+          )}
+        </div>
+      )}
+
+      {/* 5. Nafahat Salawat Daily Log Details */}
+      {(showAll || activeCategory === "nafahatSalawat") && (
+        <div className="p-3 bg-white rounded-xl border border-rose-200/80 space-y-2">
+          <div className="flex items-center justify-between pb-1 border-b border-rose-100">
+            <h4 className="text-xs font-black text-rose-900 flex items-center gap-1">
+              🌸 الصلاة على النبي ﷺ (نفحات ربيعية) - المتابعة اليومية
+            </h4>
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="font-bold text-rose-800 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                الإجمالي: {s.sumSalawat.toLocaleString()} صلاة
+              </span>
+              <span className="font-bold text-rose-800 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                المعدل: {s.avgSalawatPerDay.toLocaleString()} / يوم
+              </span>
+            </div>
+          </div>
+
+          {displayDates.length > 0 ? (
+            <div className="space-y-1.5 text-[10px]">
+              {displayDates.map((dateStr) => {
+                const dayStats = getMemberStatsForDate(uData, dateStr);
+                const nLog = uData?.nafahatLogs?.find((n: any) => n.date === dateStr);
+                const count = nLog?.salawat_count || 0;
+                const formula = nLog?.salawat_formula_title || "الصلاة على النبي ﷺ";
+
+                return (
+                  <div key={dateStr} className="flex flex-wrap items-center justify-between p-2 bg-rose-50/40 rounded-lg border border-rose-100 gap-1.5">
+                    <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                      <span className="text-rose-950 font-black">{getArabicDayName(dateStr)}</span>
+                      <span className="text-slate-500 font-mono text-[10px] dir-ltr">({dateStr})</span>
+                    </div>
+                    <div className="flex items-center gap-2 font-bold">
+                      {count > 0 ? (
+                        <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-950 font-black border border-rose-200">
+                          {count.toLocaleString()} صلاة ✓ ({formula})
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-400">
+                          لم يسجل صلاة على النبي
+                        </span>
+                      )}
+                    </div>
+                    <span className={`font-black text-[10px] bg-white px-2 py-0.5 rounded border ${count > 0 ? "text-rose-800 border-rose-200" : "text-slate-400 border-slate-200"}`}>
+                      {dayStats.salawatPct}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[10px] text-slate-500 font-medium">لم يتم تسجيل صلاة على النبي بعد.</p>
+          )}
+        </div>
+      )}
+
+      {/* 6. Nafahat Sunnahs and Prophetic Gifts Daily Log Details */}
+      {(showAll || activeCategory === "nafahatSunnah") && (
+        <div className="p-3 bg-white rounded-xl border border-teal-200/80 space-y-2">
+          <div className="flex items-center justify-between pb-1 border-b border-teal-100">
+            <h4 className="text-xs font-black text-teal-900 flex items-center gap-1">
+              🌿 السنن والهدايا النبوية (نفحات ربيعية) - المتابعة اليومية
+            </h4>
+            <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+              المعدل: {s.sunnahPct}% ({s.sumSunnahDone} سنّة + {s.sumHadayaRevived} هدية ⭐)
+            </span>
+          </div>
+
+          {displayDates.length > 0 ? (
+            <div className="space-y-1.5 text-[10px]">
+              {displayDates.map((dateStr) => {
+                const dayStats = getMemberStatsForDate(uData, dateStr);
+                const nLog = uData?.nafahatLogs?.find((n: any) => n.date === dateStr);
+                const sunCount = Array.isArray(nLog?.regular_sunnah_ids) ? nLog.regular_sunnah_ids.length : 0;
+                const hasRevivedGift = nLog?.rare_sunnah_ratings && Object.keys(nLog.rare_sunnah_ratings).length > 0;
+
+                return (
+                  <div key={dateStr} className="flex flex-wrap items-center justify-between p-2 bg-teal-50/40 rounded-lg border border-teal-100 gap-1.5">
+                    <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                      <span className="text-teal-950 font-black">{getArabicDayName(dateStr)}</span>
+                      <span className="text-slate-500 font-mono text-[10px] dir-ltr">({dateStr})</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 font-bold text-[10px]">
+                      <span className={`px-2 py-0.5 rounded ${sunCount > 0 ? "bg-teal-100 text-teal-950 font-black border border-teal-200" : "bg-slate-100 text-slate-400"}`}>
+                        السنن اليومية: {sunCount} سنن ✓
+                      </span>
+                      {hasRevivedGift && (
+                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-950 font-black border border-amber-300">
+                          ⭐ أحيا الهدية النبوية
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-black text-teal-800 text-[10px] bg-white px-2 py-0.5 rounded border border-teal-200">
+                      {dayStats.sunnahPct}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[10px] text-slate-500 font-medium">لم يتم تسجيل سنن أو هدايا بعد.</p>
           )}
         </div>
       )}
@@ -1306,9 +1565,25 @@ function AdminPage() {
   const [thikrMsg, setThikrMsg] = useState("");
   const [addingThikr, setAddingThikr] = useState(false);
 
+  // New Global Hadaya Form State
+  const [selectedHadayaPreset, setSelectedHadayaPreset] = useState("");
+  const [hadayaTitle, setHadayaTitle] = useState("");
+  const [hadayaHadithText, setHadayaHadithText] = useState("");
+  const [hadayaBenefit, setHadayaBenefit] = useState("");
+  const [hadayaTargetType, setHadayaTargetType] = useState<"rabi_day" | "all" | "date">("rabi_day");
+  const [hadayaDay, setHadayaDay] = useState(1);
+  const [hadayaSpecificDate, setHadayaSpecificDate] = useState(isoDate());
+  const [hadayaMsg, setHadayaMsg] = useState("");
+  const [addingHadaya, setAddingHadaya] = useState(false);
+  const [showHadayaForm, setShowHadayaForm] = useState(false);
+
   // Real-time Global Lists
   const [globalHabits, setGlobalHabits] = useState<any[]>([]);
   const [globalAthkar, setGlobalAthkar] = useState<any[]>([]);
+  const [globalHadaya, setGlobalHadaya] = useState<GlobalHadayaItem[]>([]);
+  const [showHadayaManagerModal, setShowHadayaManagerModal] = useState(false);
+  const [salawatFormulas, setSalawatFormulas] = useState<SalawatFormula[]>([]);
+  const [showSalawatManagerModal, setShowSalawatManagerModal] = useState(false);
 
   // Edit Modals State
   const [editingHabit, setEditingHabit] = useState<{
@@ -1328,6 +1603,15 @@ function AdminPage() {
     duration_scope: "week" | "month" | "lifetime";
   } | null>(null);
 
+  const [editingHadaya, setEditingHadaya] = useState<{
+    id: string;
+    title: string;
+    hadith_text: string;
+    benefit: string;
+    target_type: "rabi_day" | "all" | "date";
+    target_value: string;
+  } | null>(null);
+
   // Selected Date for Excel export / viewing
   const [exportDate, setExportDate] = useState(isoDate());
 
@@ -1339,12 +1623,60 @@ function AdminPage() {
   const [viewMode, setViewMode] = useState<"byDate" | "byMember">("byDate");
   const [onlySubmitted, setOnlySubmitted] = useState<boolean>(false);
   const [dateSortAsc, setDateSortAsc] = useState<boolean>(false);
-  const [memberSortMode, setMemberSortMode] = useState<"name" | "totalAvg" | "mostDays" | "quran" | "athkar" | "prayer" | "habits">("name");
+  const [memberSortMode, setMemberSortMode] = useState<"name" | "totalAvg" | "mostDays" | "quran" | "athkar" | "prayer" | "habits" | "nafahatSalawat" | "nafahatSunnah">("name");
   const [filterStartDate, setFilterStartDate] = useState<string>("");
   const [filterEndDate, setFilterEndDate] = useState<string>("");
+  const [memberSearchQuery, setMemberSearchQuery] = useState<string>("");
   const [showLeaderboard, setShowLeaderboard] = useState<boolean>(false);
   const [selectedLeaderboardMember, setSelectedLeaderboardMember] = useState<UserProfileDoc | null>(null);
   const [showAllUserHabitsModal, setShowAllUserHabitsModal] = useState<boolean>(false);
+
+  // Admin Direct Password Reset State
+  const [adminResetUser, setAdminResetUser] = useState<UserProfileDoc | null>(null);
+  const [adminNewPassword, setAdminNewPassword] = useState<string>("123456");
+  const [adminResetMsg, setAdminResetMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [adminResetLoading, setAdminResetLoading] = useState<boolean>(false);
+  const [showAdminPasswordPlain, setShowAdminPasswordPlain] = useState<boolean>(true);
+
+  const handleAdminResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminResetUser) return;
+    if (!adminNewPassword.trim() || adminNewPassword.trim().length < 4) {
+      setAdminResetMsg({ type: "error", text: "يرجى إدخال كلمة سر لا تقل عن 4 خانات" });
+      return;
+    }
+    setAdminResetLoading(true);
+    setAdminResetMsg(null);
+    try {
+      const newPass = adminNewPassword.trim();
+      const userUid = adminResetUser.uid;
+      const userEmail = adminResetUser.email || "";
+      const accDocId = userEmail ? getAccountDocId(userEmail) : userUid;
+
+      await setDoc(
+        doc(dbFirestore, "users", userUid),
+        { password: newPass, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
+      if (accDocId && accDocId !== userUid) {
+        await setDoc(
+          doc(dbFirestore, "users", accDocId),
+          { password: newPass, updatedAt: new Date().toISOString() },
+          { merge: true }
+        ).catch(() => {});
+      }
+
+      setAdminResetMsg({
+        type: "success",
+        text: `✓ تم تعيين كلمة السر للعضو "${adminResetUser.displayName || userEmail}" بنجاح إلى: (${newPass})`,
+      });
+    } catch (err: any) {
+      console.error("Admin password reset error:", err);
+      setAdminResetMsg({ type: "error", text: "❌ تعذر تحديث كلمة السر: " + (err?.message || "خطأ غير معروف") });
+    } finally {
+      setAdminResetLoading(false);
+    }
+  };
 
   // Load all users & cloud data & global items from Firestore in real-time
   useEffect(() => {
@@ -1448,11 +1780,23 @@ function AdminPage() {
       }
     });
 
+    // 5. Real-time listener for global_hadaya collection
+    const unsubGlobalHadaya = subscribeGlobalHadaya((items) => {
+      setGlobalHadaya(items);
+    });
+
+    // 6. Real-time listener for salawat_formulas
+    const unsubSalawat = subscribeGlobalSalawatFormulas((list) => {
+      setSalawatFormulas(list);
+    });
+
     return () => {
       unsubUsers();
       unsubUserData();
       unsubGlobalHabits();
       unsubGlobalAthkar();
+      unsubGlobalHadaya();
+      unsubSalawat();
     };
   }, [currentUser?.isAdmin]);
 
@@ -1557,11 +1901,13 @@ function AdminPage() {
   };
 
   const handleDeleteGlobalHabit = async (docId: string, name?: string) => {
-    if (!window.confirm("هل أنت تأكد من إزالة هذا الخُلق العام؟")) return;
     try {
       await deleteGlobalHabit(docId, name);
+      setHabitMsg(`✓ تم حذف الخُلق بنجاح`);
+      setTimeout(() => setHabitMsg(""), 3000);
     } catch (err) {
       console.error("Failed to delete global habit:", err);
+      setHabitMsg("❌ تعذر حذف الخُلق");
     }
   };
 
@@ -1602,11 +1948,66 @@ function AdminPage() {
   };
 
   const handleDeleteGlobalThikr = async (docId: string, name?: string) => {
-    if (!window.confirm("هل أنت تأكد من إزالة هذا ورْد الذكر العام؟")) return;
     try {
       await deleteGlobalThikr(docId, name);
+      setThikrMsg(`✓ تم حذف ورْد الذكر بنجاح`);
+      setTimeout(() => setThikrMsg(""), 3000);
     } catch (err) {
       console.error("Failed to delete global thikr:", err);
+      setThikrMsg("❌ تعذر حذف ورْد الذكر");
+    }
+  };
+
+  const handleAddGlobalHadaya = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!hadayaTitle.trim() || !hadayaHadithText.trim()) return;
+    setAddingHadaya(true);
+    setHadayaMsg("");
+    try {
+      const targetVal = hadayaTargetType === "rabi_day" ? String(hadayaDay) : hadayaTargetType === "date" ? hadayaSpecificDate : "all";
+      await createGlobalHadaya({
+        title: hadayaTitle.trim(),
+        hadith_text: hadayaHadithText.trim(),
+        benefit: hadayaBenefit.trim(),
+        target_type: hadayaTargetType,
+        target_value: targetVal,
+      });
+      setHadayaMsg("✨ تم نشر الهدية النبوية بنجاح لجميع الأعضاء!");
+      setHadayaTitle("");
+      setHadayaHadithText("");
+      setHadayaBenefit("");
+    } catch (err: any) {
+      setHadayaMsg("❌ حدث خطأ عند إضافة الهدية النبوية");
+    } finally {
+      setAddingHadaya(false);
+    }
+  };
+
+  const handleUpdateGlobalHadayaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingHadaya || !editingHadaya.title.trim()) return;
+    try {
+      await updateGlobalHadaya(editingHadaya.id, {
+        title: editingHadaya.title.trim(),
+        hadith_text: editingHadaya.hadith_text.trim(),
+        benefit: editingHadaya.benefit.trim(),
+        target_type: editingHadaya.target_type,
+        target_value: editingHadaya.target_value,
+      });
+      setEditingHadaya(null);
+    } catch (err) {
+      console.error("Failed to update global hadaya:", err);
+    }
+  };
+
+  const handleDeleteGlobalHadayaItem = async (id: string, title: string) => {
+    try {
+      await deleteGlobalHadaya(id);
+      setHadayaMsg(`✓ تم حذف الهدية النبوية "${title}" بنجاح`);
+      setTimeout(() => setHadayaMsg(""), 3000);
+    } catch (err) {
+      console.error("Failed to delete global hadaya:", err);
+      setHadayaMsg("❌ تعذر حذف الهدية النبوية");
     }
   };
 
@@ -1997,6 +2398,90 @@ function AdminPage() {
           </tr>
         `;
       });
+    } else if (memberSortMode === "nafahatSalawat") {
+      title = `تقرير تقييم الصلاة على النبي ﷺ (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الترتيب</th>
+        <th>اسم العضو</th>
+        <th>مجموع الصلوات على النبي ﷺ</th>
+        <th>المتوسط اليومي للصلوات</th>
+        <th>أعلى يوم إنجازاً</th>
+        <th>نسبة الإنجاز اليومي (%)</th>
+        <th>أيام التعبئة بالنفحات</th>
+        <th>حالة التعبئة</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => {
+        const uA = getUserDataForMember(a, userDataMap);
+        const uB = getUserDataForMember(b, userDataMap);
+        const sA = getOverallMemberStats(uA, evalDates);
+        const sB = getOverallMemberStats(uB, evalDates);
+        if (sB.sumSalawat !== sA.sumSalawat) return sB.sumSalawat - sA.sumSalawat;
+        if (sB.salawatPct !== sA.salawatPct) return sB.salawatPct - sA.salawatPct;
+        return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+      });
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; color: #047857; font-size: 15px;">${stats.sumSalawat.toLocaleString("ar-EG")} صلاة</td>
+            <td style="text-align: center; font-weight: bold;">${stats.avgSalawatPerDay.toLocaleString("ar-EG")} / يوم</td>
+            <td style="text-align: center;">${stats.maxSalawatDay.toLocaleString("ar-EG")}</td>
+            <td style="text-align: center; font-weight: bold; color: #0f766e;">${stats.salawatPct}%</td>
+            <td style="text-align: center;">${stats.activeNafahatDays} من ${evalDates.length} يوم</td>
+            <td style="text-align: center; font-weight: bold; color: ${stats.sumSalawat > 0 ? '#15803d' : '#94a3b8'};">
+              ${stats.sumSalawat > 0 ? "نشط ✓" : "لم يسجل"}
+            </td>
+          </tr>
+        `;
+      });
+    } else if (memberSortMode === "nafahatSunnah") {
+      title = `تقرير تقييم السنن اليومية والهدايا النبوية (${dateRangeLabel})`;
+      thHeaders = `
+        <th>الترتيب</th>
+        <th>اسم العضو</th>
+        <th>مجموع السنن الراتبة المنجزة</th>
+        <th>مجموع الهدايا النبوية المحياة</th>
+        <th>نسبة الالتزام بالسنن (%)</th>
+        <th>أيام التعبئة</th>
+        <th>حالة التعبئة</th>
+      `;
+
+      const sorted = [...members].sort((a, b) => {
+        const uA = getUserDataForMember(a, userDataMap);
+        const uB = getUserDataForMember(b, userDataMap);
+        const sA = getOverallMemberStats(uA, evalDates);
+        const sB = getOverallMemberStats(uB, evalDates);
+        const totalA = sA.sumSunnahDone + sA.sumHadayaRevived;
+        const totalB = sB.sumSunnahDone + sB.sumHadayaRevived;
+        if (totalB !== totalA) return totalB - totalA;
+        if (sB.sunnahPct !== sA.sunnahPct) return sB.sunnahPct - sA.sunnahPct;
+        return (a.displayName || "").localeCompare(b.displayName || "", "ar");
+      });
+
+      sorted.forEach((m, idx) => {
+        const uData = getUserDataForMember(m, userDataMap);
+        const stats = getOverallMemberStats(uData, evalDates);
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+            <td style="font-weight: bold; text-align: right;">${m.displayName || "بدون اسم"}</td>
+            <td style="text-align: center; font-weight: bold; color: #0f766e;">${stats.sumSunnahDone} سنّة</td>
+            <td style="text-align: center; font-weight: bold; color: #d97706;">${stats.sumHadayaRevived} هدية</td>
+            <td style="text-align: center; font-weight: bold; color: #047857; font-size: 14px;">${stats.sunnahPct}%</td>
+            <td style="text-align: center;">${stats.activeNafahatDays} من ${evalDates.length} يوم</td>
+            <td style="text-align: center; font-weight: bold; color: ${stats.sumSunnahDone + stats.sumHadayaRevived > 0 ? '#15803d' : '#94a3b8'};">
+              ${stats.sumSunnahDone + stats.sumHadayaRevived > 0 ? "نشط ✓" : "لم يسجل"}
+            </td>
+          </tr>
+        `;
+      });
     }
 
     const fullHtml = `
@@ -2017,6 +2502,8 @@ function AdminPage() {
       athkar: "تقرير_معيار_الأذكار_اليومية",
       prayer: "تقرير_معيار_التزام_الصلاة",
       habits: "تقرير_معيار_الأخلاق_والسنن",
+      nafahatSalawat: "تقرير_معيار_الصلاة_على_النبي",
+      nafahatSunnah: "تقرير_معيار_السنن_والهدايا_النبوية",
       name: "تقرير_الأعضاء_الأبجدي",
       totalAvg: "تقرير_الأعضاء_المعدل_العام",
       mostDays: "تقرير_الأعضاء_الأكثر_تعبئة_للأيام",
@@ -2142,7 +2629,21 @@ function AdminPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowSalawatManagerModal(true)}
+            className="px-3 py-1.5 text-xs font-black text-teal-900 bg-teal-50 border border-teal-300 rounded-xl hover:bg-teal-100 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+          >
+            <span>🌸 إدارة وترتيب صِيَغ الصلاة ({salawatFormulas.length || 30})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowHadayaManagerModal(true)}
+            className="px-3 py-1.5 text-xs font-black text-emerald-900 bg-emerald-50 border border-emerald-300 rounded-xl hover:bg-emerald-100 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+          >
+            <span>🎁 إدارة الهدايا النبوية ({globalHadaya.length})</span>
+          </button>
           <button
             onClick={() => toggleAdminRole()}
             className="px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 cursor-pointer"
@@ -2152,8 +2653,8 @@ function AdminPage() {
         </div>
       </header>
 
-      {/* 1 & 2. Add Global Habit and Add Global Thikr Sections Side by Side in a Compact Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+      {/* 1, 2, 3 & 4. Add Global Habit, Add Global Thikr, Add Global Hadaya, and Salawat Formulas Manager in a 4-Column Responsive Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         {/* 1. Add Global Habit Section (Ultra Slim 2 lines when closed) */}
         <section className={`rounded-2xl border transition-all ${
           showHabitForm
@@ -2450,6 +2951,258 @@ function AdminPage() {
               </div>
             </div>
           )}
+        </section>
+
+        {/* 3. Add Global Hadaya Section (Ultra Slim 2 lines when closed) */}
+        <section className={`rounded-2xl border transition-all ${
+          showHadayaForm
+            ? "border-emerald-300 bg-gradient-to-br from-emerald-50/80 to-teal-50/40 p-3.5 shadow-xs"
+            : "border-emerald-200/80 bg-emerald-50/40 hover:bg-emerald-100/60 p-2.5 px-3 shadow-2xs flex flex-col justify-center"
+        }`}>
+          <div
+            onClick={() => setShowHadayaForm(!showHadayaForm)}
+            className="flex items-center justify-between cursor-pointer select-none gap-2"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Gift className="h-4 w-4 text-emerald-600 shrink-0" />
+              <div className="min-w-0">
+                <h2 className="text-xs font-black text-slate-900 truncate flex items-center gap-1.5">
+                  <span>إضافة هدية نبوية 🎁</span>
+                  {globalHadaya.length > 0 && !showHadayaForm && (
+                    <span className="text-[10px] text-emerald-900 font-bold bg-emerald-100/80 px-1.5 py-0.2 rounded border border-emerald-200">
+                      ({globalHadaya.length})
+                    </span>
+                  )}
+                </h2>
+                {!showHadayaForm && (
+                  <p className="text-[10px] text-slate-500 font-medium truncate">نشر هدي نبوي وسنة مباركة للأعضاء</p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="px-2 py-0.5 rounded-md bg-emerald-100 hover:bg-emerald-200 text-emerald-950 text-xs font-black transition-all flex items-center gap-1 border border-emerald-300/50 shrink-0"
+            >
+              <span>{showHadayaForm ? "إخفاء ✖" : "+"}</span>
+              {showHadayaForm ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+
+          {showHadayaForm && (
+            <div className="mt-3 pt-3 border-t border-emerald-200/60 animate-in fade-in duration-150">
+              <p className="text-[11px] text-slate-600 font-medium mb-3">
+                إضافة سنة نبوية مهجورة أو هدية محمدية وتحديد اليوم الخاص بها.
+              </p>
+
+              <form onSubmit={handleAddGlobalHadaya} className="space-y-2.5">
+                {/* Prophetic Gifts Preset Dropdown for Fast Auto-fill */}
+                <div className="p-2.5 bg-emerald-100/60 rounded-xl border border-emerald-300">
+                  <label className="text-[11px] font-black text-emerald-950 block mb-1 flex items-center justify-between">
+                    <span>✨ اختيار من السنن والهدايا النبوية الجاهزة (تعبئة تلقائية)</span>
+                    {selectedHadayaPreset && (
+                      <span className="text-[10px] text-emerald-800 font-bold bg-white px-1.5 py-0.2 rounded border border-emerald-200">
+                        تمت التعبئة ✓
+                      </span>
+                    )}
+                  </label>
+                  <select
+                    value={selectedHadayaPreset}
+                    onChange={(e) => {
+                      const pId = e.target.value;
+                      setSelectedHadayaPreset(pId);
+                      if (pId) {
+                        const preset = PROPHETIC_GIFT_PRESETS.find((p) => p.id === pId);
+                        if (preset) {
+                          setHadayaTitle(preset.title);
+                          setHadayaHadithText(preset.hadithText);
+                          setHadayaBenefit(preset.benefit);
+                        }
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-emerald-300 bg-white text-xs font-black text-emerald-950 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer shadow-2xs"
+                  >
+                    <option value="">-- اختر هدية نبوية جاهزة للتعبئة السريعة (مثال: صلاة التسابيح) --</option>
+                    {PROPHETIC_GIFT_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">عنوان الهدية النبوية *</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: صلاة التسابيح / ركعتا الضحى / التبسم في وجوه المؤمنين..."
+                    value={hadayaTitle}
+                    onChange={(e) => setHadayaTitle(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">نص الحديث أو العمل الشريف *</label>
+                  <textarea
+                    rows={2}
+                    placeholder="مثال: قال رسول الله ﷺ: «يُصبح على كل سُلامى من أحدكم صدقة...»"
+                    value={hadayaHadithText}
+                    onChange={(e) => setHadayaHadithText(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-none focus:border-emerald-500 leading-relaxed resize-none"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">الفضل والأثر الروحي 🌿</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: تجزئ عن ٣٦٠ صدقة وتكفي الإنسان نهاره"
+                    value={hadayaBenefit}
+                    onChange={(e) => setHadayaBenefit(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">تحديد الظهور 🗓️</label>
+                    <select
+                      value={hadayaTargetType}
+                      onChange={(e: any) => setHadayaTargetType(e.target.value)}
+                      className="w-full px-2 py-1.5 rounded-xl border border-slate-200 bg-white text-[11px] font-bold focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="rabi_day">🌙 يوم من ربيع (١ - ٣٠)</option>
+                      <option value="all">🌟 يظهر كل الأيام</option>
+                      <option value="date">📅 تاريخ ميلادي محدد</option>
+                    </select>
+                  </div>
+
+                  {hadayaTargetType === "rabi_day" && (
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-700 block mb-1">اليوم من ربيع *</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={hadayaDay}
+                        onChange={(e) => setHadayaDay(Number(e.target.value))}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-none focus:border-emerald-500"
+                        required
+                      />
+                    </div>
+                  )}
+
+                  {hadayaTargetType === "date" && (
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-700 block mb-1">التاريخ المحدد *</label>
+                      <input
+                        type="date"
+                        value={hadayaSpecificDate}
+                        onChange={(e) => setHadayaSpecificDate(e.target.value)}
+                        className="w-full px-2 py-1 rounded-xl border border-slate-200 bg-white text-[11px] font-bold focus:outline-none focus:border-emerald-500"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  {hadayaMsg && <span className="text-[11px] font-bold text-emerald-700">{hadayaMsg}</span>}
+                  <button
+                    type="submit"
+                    disabled={addingHadaya}
+                    className="mr-auto px-4 py-2 rounded-xl bg-emerald-600 text-white font-black text-xs shadow-xs hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Plus className="h-3.5 w-3.5 text-white" /> {addingHadaya ? "جاري النشر..." : "نشر الهدية للأعضاء 🎁"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* List of Published Global Hadaya with Edit and Delete */}
+          {globalHadaya.length > 0 && (
+            <div className="mt-3 border-t border-emerald-200/60 pt-2.5">
+              <h3 className="text-[11px] font-black text-emerald-950 mb-2 flex items-center gap-1.5">
+                <span>🎁 الهدايا النبوية المنشورة ({globalHadaya.length})</span>
+              </h3>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                {globalHadaya.map((gh) => (
+                  <div key={gh.id} className="bg-white/90 p-2 rounded-xl border border-emerald-200 shadow-2xs flex items-center justify-between gap-1.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-extrabold text-[11px] text-slate-900 truncate">{gh.title}</span>
+                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-900 border border-emerald-200">
+                          {gh.target_type === "rabi_day" ? `اليوم ${gh.target_value} ربيع` : gh.target_type === "all" ? "كل الأيام" : gh.target_value}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => setEditingHadaya({
+                          id: gh.id,
+                          title: gh.title,
+                          hadith_text: gh.hadith_text,
+                          benefit: gh.benefit || "",
+                          target_type: (gh.target_type as any) || "rabi_day",
+                          target_value: gh.target_value || "1",
+                        })}
+                        className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 hover:bg-emerald-100 hover:text-emerald-900 text-[10px] font-bold cursor-pointer transition-colors"
+                        title="تعديل"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGlobalHadayaItem(gh.id, gh.title)}
+                        className="px-1.5 py-1 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 text-[10px] font-bold cursor-pointer transition-colors"
+                        title="حذف"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* 4. Manage Salawat Formulas (30 Days) Section / Card */}
+        <section
+          onClick={() => setShowSalawatManagerModal(true)}
+          className="rounded-2xl border border-teal-200/80 bg-teal-50/40 hover:bg-teal-100/60 p-2.5 px-3 shadow-2xs flex flex-col justify-between cursor-pointer transition-all hover:border-teal-400 group select-none"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-base shrink-0 group-hover:scale-110 transition-transform">🌸</span>
+              <div className="min-w-0">
+                <h2 className="text-xs font-black text-slate-900 truncate flex items-center gap-1.5">
+                  <span>صِيَغ الصلاة على النبي ﷺ</span>
+                  <span className="text-[10px] text-teal-900 font-bold bg-teal-100/90 px-1.5 py-0.2 rounded border border-teal-300">
+                    ({salawatFormulas.length || 30})
+                  </span>
+                </h2>
+                <p className="text-[10px] text-slate-500 font-medium truncate">
+                  ترتيب الأيام، تعديل النصوص، وتبديل الصيغ
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 pt-2.5 border-t border-teal-200/60 flex items-center justify-between gap-1">
+            <span className="text-[10px] font-bold text-teal-800">
+              ٣٠ صيغة مباركة لشهر ربيع
+            </span>
+            <button
+              type="button"
+              className="px-2.5 py-1 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-black text-[10px] shrink-0 shadow-2xs transition-all cursor-pointer flex items-center gap-1"
+            >
+              <Layers className="h-3 w-3" />
+              <span>إدارة وترتيب</span>
+            </button>
+          </div>
         </section>
       </div>
 
@@ -2791,6 +3544,48 @@ function AdminPage() {
                       </button>
                     )}
 
+                    {/* 8. Nafahat: Salawat */}
+                    <button
+                      type="button"
+                      onClick={() => setMemberSortMode("nafahatSalawat")}
+                      title="8. الأعلى في الصلاة على النبي ﷺ"
+                      className={`px-2 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 text-[11px] font-bold ${
+                        memberSortMode === "nafahatSalawat"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-500"
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                      }`}
+                    >
+                      <Heart className="h-3.5 w-3.5 text-emerald-700 fill-emerald-600/30" />
+                      <span className="hidden sm:inline">الصلاة على النبي</span>
+                    </button>
+
+                    {/* 9. Nafahat: Sunnahs & Prophetic Gifts */}
+                    <button
+                      type="button"
+                      onClick={() => setMemberSortMode("nafahatSunnah")}
+                      title="9. الأعلى في السنن والهدايا النبوية"
+                      className={`px-2 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 text-[11px] font-bold ${
+                        memberSortMode === "nafahatSunnah"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-500"
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                      }`}
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-teal-700" />
+                      <span className="hidden sm:inline">السنن والهدايا</span>
+                    </button>
+
+                    {/* Small icon-only button without text, appears ONLY when memberSortMode === 'nafahatSunnah' */}
+                    {memberSortMode === "nafahatSunnah" && (
+                      <button
+                        type="button"
+                        onClick={() => setShowHadayaManagerModal(true)}
+                        title="إدارة الهدايا والسنن النبوية"
+                        className="p-1.5 rounded-lg bg-teal-100 hover:bg-teal-200 text-teal-900 border border-teal-300 transition-all cursor-pointer shadow-2xs flex items-center justify-center shrink-0"
+                      >
+                        <Gift className="h-3.5 w-3.5 text-teal-700" />
+                      </button>
+                    )}
+
                     {/* Dedicated Excel Export Button for currently active criterion */}
                     <button
                       type="button"
@@ -3032,6 +3827,27 @@ function AdminPage() {
             {/* MODE 2: Grouped by Member */}
             {viewMode === "byMember" && (
               <div className="space-y-2">
+                {/* Search Bar for Members */}
+                <div className="relative mb-2">
+                  <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={memberSearchQuery}
+                    onChange={(e) => setMemberSearchQuery(e.target.value)}
+                    placeholder="🔍 بحث سريع عن اسم العضو أو البريد (مثال: mais.almasri08)..."
+                    className="w-full pr-9 pl-8 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200 shadow-2xs"
+                  />
+                  {memberSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setMemberSearchQuery("")}
+                      className="absolute left-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-md cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+
                 {(() => {
                   const evalDates = getUniqueSubmissionDates(
                     members,
@@ -3041,7 +3857,23 @@ function AdminPage() {
                     filterEndDate
                   );
 
-                  return [...members]
+                  const filteredMembers = members.filter((m) => {
+                    if (!memberSearchQuery.trim()) return true;
+                    const q = memberSearchQuery.trim().toLowerCase();
+                    const name = (m.displayName || "").toLowerCase();
+                    const email = (m.email || "").toLowerCase();
+                    return name.includes(q) || email.includes(q);
+                  });
+
+                  if (filteredMembers.length === 0) {
+                    return (
+                      <p className="text-center text-xs text-slate-400 py-6 font-bold bg-white rounded-xl border border-dashed border-slate-200">
+                        لا يوجد أي عضو يطابق بحث: "{memberSearchQuery}"
+                      </p>
+                    );
+                  }
+
+                  return [...filteredMembers]
                     .sort((a, b) => {
                       const uDataA = getUserDataForMember(a, userDataMap);
                       const uDataB = getUserDataForMember(b, userDataMap);
@@ -3080,6 +3912,20 @@ function AdminPage() {
                         const statsB = getOverallMemberStats(uDataB, evalDates);
                         if (statsB.habitsPct !== statsA.habitsPct) return statsB.habitsPct - statsA.habitsPct;
                         if (statsB.submittedDaysCount !== statsA.submittedDaysCount) return statsB.submittedDaysCount - statsA.submittedDaysCount;
+                      } else if (memberSortMode === "nafahatSalawat") {
+                        const statsA = getOverallMemberStats(uDataA, evalDates);
+                        const statsB = getOverallMemberStats(uDataB, evalDates);
+                        if (statsB.sumSalawat !== statsA.sumSalawat) return statsB.sumSalawat - statsA.sumSalawat;
+                        if (statsB.salawatPct !== statsA.salawatPct) return statsB.salawatPct - statsA.salawatPct;
+                        if (statsB.activeNafahatDays !== statsA.activeNafahatDays) return statsB.activeNafahatDays - statsA.activeNafahatDays;
+                      } else if (memberSortMode === "nafahatSunnah") {
+                        const statsA = getOverallMemberStats(uDataA, evalDates);
+                        const statsB = getOverallMemberStats(uDataB, evalDates);
+                        const totalA = statsA.sumSunnahDone + statsA.sumHadayaRevived;
+                        const totalB = statsB.sumSunnahDone + statsB.sumHadayaRevived;
+                        if (totalB !== totalA) return totalB - totalA;
+                        if (statsB.sunnahPct !== statsA.sunnahPct) return statsB.sunnahPct - statsA.sunnahPct;
+                        if (statsB.activeNafahatDays !== statsA.activeNafahatDays) return statsB.activeNafahatDays - statsA.activeNafahatDays;
                       }
 
                       return (a.displayName || "").localeCompare(b.displayName || "", "ar");
@@ -3125,6 +3971,20 @@ function AdminPage() {
                       } else if (memberSortMode === "habits") {
                         badgeElement = <span>🌸 الأخلاق {overallStats.habitsPct}%</span>;
                         badgeClass = getPctBadgeClass(overallStats.habitsPct);
+                      } else if (memberSortMode === "nafahatSalawat") {
+                        badgeElement = (
+                          <span>
+                            🌸 {overallStats.sumSalawat.toLocaleString("ar-EG")} صلاة ({overallStats.salawatPct}%)
+                          </span>
+                        );
+                        badgeClass = getPctBadgeClass(overallStats.salawatPct);
+                      } else if (memberSortMode === "nafahatSunnah") {
+                        badgeElement = (
+                          <span>
+                            🌿 {overallStats.sumSunnahDone} سنّة + {overallStats.sumHadayaRevived} هدية ({overallStats.sunnahPct}%)
+                          </span>
+                        );
+                        badgeClass = getPctBadgeClass(overallStats.sunnahPct);
                       }
 
                       return (
@@ -3165,6 +4025,19 @@ function AdminPage() {
                               <span className={`px-2.5 py-1 text-[11px] font-black rounded-lg border ${badgeClass}`}>
                                 {badgeElement}
                               </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAdminResetUser(m);
+                                  setAdminNewPassword("123456");
+                                  setAdminResetMsg(null);
+                                }}
+                                className="p-1.5 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100 hover:border-amber-300 shadow-2xs"
+                                title="تغيير كلمة السر لهذا العضو فوراً"
+                              >
+                                <KeyRound className="h-3.5 w-3.5 text-amber-700" />
+                              </button>
                               <button
                                 type="button"
                                 className={`p-1.5 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
@@ -3337,6 +4210,109 @@ function AdminPage() {
         </div>
       )}
 
+      {/* Edit Global Hadaya Modal */}
+      {editingHadaya && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border border-emerald-200 animate-in zoom-in-95 duration-150">
+            <h3 className="text-base font-extrabold text-slate-900 mb-4 flex items-center gap-2">
+              ✏️ تعديل الهدية النبوية المنشورة
+            </h3>
+            <form onSubmit={handleUpdateGlobalHadayaSubmit} className="space-y-3.5">
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">عنوان الهدية *</label>
+                <input
+                  type="text"
+                  value={editingHadaya.title}
+                  onChange={(e) => setEditingHadaya({ ...editingHadaya, title: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">نص الحديث أو العمل *</label>
+                <textarea
+                  rows={2}
+                  value={editingHadaya.hadith_text}
+                  onChange={(e) => setEditingHadaya({ ...editingHadaya, hadith_text: e.target.value })}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-medium focus:outline-none focus:border-emerald-500 leading-relaxed resize-none"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 block mb-1">الفضل والأثر الروحي</label>
+                <input
+                  type="text"
+                  value={editingHadaya.benefit}
+                  onChange={(e) => setEditingHadaya({ ...editingHadaya, benefit: e.target.value })}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-medium focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 block mb-1">تحديد الظهور</label>
+                  <select
+                    value={editingHadaya.target_type}
+                    onChange={(e: any) => setEditingHadaya({ ...editingHadaya, target_type: e.target.value })}
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 text-[11px] font-bold focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="rabi_day">🌙 يوم من ربيع (١ - ٣٠)</option>
+                    <option value="all">🌟 كل الأيام</option>
+                    <option value="date">📅 تاريخ ميلادي</option>
+                  </select>
+                </div>
+
+                {editingHadaya.target_type === "rabi_day" && (
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">اليوم (١ - ٣٠)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={30}
+                      value={editingHadaya.target_value}
+                      onChange={(e) => setEditingHadaya({ ...editingHadaya, target_value: e.target.value })}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-bold focus:outline-none focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+                )}
+
+                {editingHadaya.target_type === "date" && (
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">التاريخ</label>
+                    <input
+                      type="date"
+                      value={editingHadaya.target_value}
+                      onChange={(e) => setEditingHadaya({ ...editingHadaya, target_value: e.target.value })}
+                      className="w-full px-2 py-1 rounded-xl border border-slate-200 text-[11px] font-bold focus:outline-none focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingHadaya(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs hover:bg-slate-200 cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-emerald-600 text-white font-black text-xs hover:bg-emerald-700 cursor-pointer shadow-xs"
+                >
+                  حفظ التعديلات
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* All User Custom Habits Modal */}
       <AllUserHabitsModal
         isOpen={showAllUserHabitsModal}
@@ -3345,6 +4321,112 @@ function AdminPage() {
         userDataMap={userDataMap}
         globalHabits={globalHabits}
       />
+
+      {/* Global Hadaya / Sunnahs Manager Modal */}
+      <HadayaManagerModal
+        isOpen={showHadayaManagerModal}
+        onClose={() => setShowHadayaManagerModal(false)}
+        globalHadaya={globalHadaya}
+      />
+
+      {/* Salawat Formulas (30 Days) Manager & Reordering Modal */}
+      <SalawatFormulaManagerModal
+        isOpen={showSalawatManagerModal}
+        onClose={() => setShowSalawatManagerModal(false)}
+        formulas={salawatFormulas}
+      />
+
+      {/* Admin Direct Password Reset Modal */}
+      {adminResetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border border-amber-300 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-amber-100 text-amber-800 rounded-xl">
+                  <KeyRound className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">تعيين كلمة سر جديدة للعضو</h3>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    {adminResetUser.displayName || adminResetUser.email}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminResetUser(null);
+                  setAdminResetMsg(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {adminResetMsg && (
+              <div
+                className={`p-3 rounded-xl mb-4 text-xs font-bold ${
+                  adminResetMsg.type === "success"
+                    ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                    : "bg-rose-50 text-rose-800 border border-rose-200"
+                }`}
+              >
+                {adminResetMsg.text}
+              </div>
+            )}
+
+            <form onSubmit={handleAdminResetPassword} className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                  كلمة السر الجديدة للعضو:
+                </label>
+                <div className="relative">
+                  <input
+                    type={showAdminPasswordPlain ? "text" : "password"}
+                    value={adminNewPassword}
+                    onChange={(e) => setAdminNewPassword(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200 font-mono pr-10"
+                    placeholder="اكتب كلمة السر الجديدة..."
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPasswordPlain(!showAdminPasswordPlain)}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                    title={showAdminPasswordPlain ? "إخفاء كلمة السر" : "إظهار كلمة السر"}
+                  >
+                    {showAdminPasswordPlain ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  * يمكنك وضع كلمة سر سهلة (مثل 123456) وإخبار العضو بها ليسجل دخوله فوراً دون مشاكل.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminResetUser(null);
+                    setAdminResetMsg(null);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs hover:bg-slate-200 cursor-pointer"
+                >
+                  إغلاق
+                </button>
+                <button
+                  type="submit"
+                  disabled={adminResetLoading}
+                  className="px-5 py-2 rounded-xl bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-600 cursor-pointer shadow-xs disabled:opacity-50"
+                >
+                  {adminResetLoading ? "جارٍ الحفظ..." : "حفظ كلمة السر وتعيينها ✓"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,9 +1,9 @@
 import { Link } from "@tanstack/react-router";
-import { BookOpen, CircleDot, Clock, Award, Home } from "lucide-react";
+import { BookOpen, CircleDot, Clock, Award, Home, Palmtree } from "lucide-react";
 
 /**
  * Bottom navigation.
- * Visual order right → left (RTL): القرآن، الأذكار، الصلاة على وقتها، الأخلاق، الرئيسية.
+ * Visual order right → left (RTL): القرآن، الأذكار، الصلاة على وقتها، الأخلاق، نفحات ربيعية، الرئيسية.
  */
 const TABS = [
   { to: "/", label: "الرئيسية", Icon: Home, tint: "home" },
@@ -11,6 +11,7 @@ const TABS = [
   { to: "/athkar", label: "ورد الأذكار", Icon: CircleDot, tint: "athkar" },
   { to: "/prayers", label: "الصلاة على وقتها", Icon: Clock, tint: "prayers" },
   { to: "/habits", label: "الأخلاق", Icon: Award, tint: "habits" },
+  { to: "/nafahat", label: "نفحات ربيعية", Icon: Palmtree, tint: "nafahat" },
 ] as const;
 
 export function TabBar() {

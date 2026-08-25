@@ -1,6 +1,22 @@
 import React, { useState } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { X, LogIn, UserPlus, CloudCheck, CloudUpload, LogOut, Lock, Mail, User as UserIcon, RefreshCw } from "lucide-react";
+import {
+  X,
+  LogIn,
+  UserPlus,
+  CloudCheck,
+  CloudUpload,
+  LogOut,
+  Lock,
+  Mail,
+  User as UserIcon,
+  RefreshCw,
+  Eye,
+  EyeOff,
+  KeyRound,
+  ShieldCheck,
+  Sparkles
+} from "lucide-react";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -8,11 +24,22 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, login, register, logout, triggerSync, syncing, lastSyncedAt, updateFullName } = useAuth();
-  const [mode, setMode] = useState<"login" | "register">("register");
+  const {
+    currentUser,
+    login,
+    register,
+    resetPasswordDirectly,
+    logout,
+    triggerSync,
+    syncing,
+    lastSyncedAt,
+    updateFullName
+  } = useAuth();
+  const [mode, setMode] = useState<"login" | "register" | "forgot">("register");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [updatedName, setUpdatedName] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -49,7 +76,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         await login(email, password);
         setSuccessMsg("تم تسجيل الدخول واسترجاع بياناتك بنجاح!");
         setTimeout(() => onClose(), 1200);
-      } else {
+      } else if (mode === "register") {
         const nameValErr = validateArabicFullName(name);
         if (nameValErr) {
           setErrorMsg(nameValErr);
@@ -59,6 +86,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         await register(name.trim(), email, password);
         setSuccessMsg("تم إنشاء الحساب وحفظ جميع بياناتك الحالية سحابياً!");
         setTimeout(() => onClose(), 1200);
+      } else if (mode === "forgot") {
+        if (!email.trim()) {
+          setErrorMsg("يرجى إدخال البريد الإلكتروني أو اسم المستخدم المسجل به.");
+          setSubmitting(false);
+          return;
+        }
+        if (password.length < 6) {
+          setErrorMsg("كلمة السر الجديدة يجب أن تكون 6 أحرف أو أرقام على الأقل.");
+          setSubmitting(false);
+          return;
+        }
+        await resetPasswordDirectly(email, password);
+        setSuccessMsg("✨ تم استرجاع حسابك وتعيين كلمة السر الجديدة وتسجيل الدخول بنجاح!");
+        setTimeout(() => onClose(), 1500);
       }
     } catch (err: any) {
       console.error("Auth error:", err);
@@ -97,14 +138,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2">
             <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600">
-              <CloudCheck className="h-5 w-5" />
+              {mode === "forgot" ? <KeyRound className="h-5 w-5" /> : <CloudCheck className="h-5 w-5" />}
             </div>
             <div>
               <h3 className="text-sm font-black text-slate-800">
-                {currentUser ? "حسابك والمزامنة السحابية" : mode === "login" ? "تسجيل الدخول" : "إنشاء حساب جديد"}
+                {currentUser
+                  ? "حسابك والمزامنة السحابية"
+                  : mode === "login"
+                  ? "تسجيل الدخول"
+                  : mode === "register"
+                  ? "إنشاء حساب جديد"
+                  : "استرجاع الحساب وتعيين كلمة السر"}
               </h3>
               <p className="text-[10px] text-slate-500">
-                {currentUser ? "بياناتك محفوظة بأمان على حسابك الشخصي" : "لحفظ إنجازاتك حتى لو تغير رابط التطبيق"}
+                {currentUser
+                  ? "بياناتك محفوظة بأمان على حسابك الشخصي"
+                  : mode === "forgot"
+                  ? "أدخل بريدك أو اسم المستخدم وكلمة السر الجديدة للاسترجاع الفوري"
+                  : "لحفظ إنجازاتك والوصول إليها من أي جهاز"}
               </p>
             </div>
           </div>
@@ -252,130 +303,214 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
             </div>
           </div>
         ) : (
-          /* FORM VIEW FOR LOGIN / REGISTER */
-          <form onSubmit={handleSubmit} className="mt-4 space-y-3.5">
-            {errorMsg && (
-              <div className="p-2.5 rounded-xl bg-red-50 text-red-700 border border-red-200 text-xs font-bold space-y-1.5">
-                <p>{errorMsg}</p>
-                {errorMsg.includes("مسجل بالفعل") && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMode("login");
-                      setErrorMsg("");
-                    }}
-                    className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-black cursor-pointer transition-colors shadow-2xs mt-1"
-                  >
-                    الضغط هنا للانتقال إلى (تسجيل الدخول) 🔑
-                  </button>
-                )}
-              </div>
-            )}
-            {successMsg && (
-              <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold">
-                {successMsg}
-              </div>
-            )}
+          /* FORM VIEW FOR LOGIN / REGISTER / FORGOT PASSWORD */
+          <div className="mt-3 space-y-3">
+            {/* Mode Switch Tabs (New Account & Login) */}
+            <div className="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("register");
+                  setErrorMsg("");
+                  setSuccessMsg("");
+                }}
+                className={`py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                  mode === "register"
+                    ? "bg-white text-indigo-700 shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                حساب جديد
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("login");
+                  setErrorMsg("");
+                  setSuccessMsg("");
+                }}
+                className={`py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                  mode === "login" || mode === "forgot"
+                    ? "bg-white text-indigo-700 shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                تسجيل الدخول
+              </button>
+            </div>
 
-            {mode === "register" && (
+            <form onSubmit={handleSubmit} className="space-y-3 pt-1">
+              {errorMsg && (
+                <div className="p-2.5 rounded-xl bg-red-50 text-red-700 border border-red-200 text-xs font-bold space-y-1.5">
+                  <p>{errorMsg}</p>
+                  {errorMsg.includes("مسجل بالفعل") && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("login");
+                        setErrorMsg("");
+                      }}
+                      className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-black cursor-pointer transition-colors shadow-2xs mt-1"
+                    >
+                      الضغط هنا للانتقال إلى (تسجيل الدخول) 🔑
+                    </button>
+                  )}
+                  {mode === "login" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("forgot");
+                        setErrorMsg("");
+                      }}
+                      className="w-full py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-lg text-xs font-black cursor-pointer transition-colors mt-1"
+                    >
+                      نسيت كلمة السر؟ اضغط هنا لتعيين كلمة سر جديدة فوراً 🔑
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {successMsg && (
+                <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold">
+                  {successMsg}
+                </div>
+              )}
+
+              {mode === "register" && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    الاسم الثلاثي (الاسم واسم الأب والكنية)
+                  </label>
+                  <div className="relative">
+                    <UserIcon className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
+                    <input
+                      type="text"
+                      required
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="أدخل اسمك الثلاثي الكامل"
+                      className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none font-semibold text-slate-800"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  الاسم الثلاثي (الاسم واسم الأب والكنية)
+                  {mode === "forgot" ? "البريد الإلكتروني أو اسم المستخدم المسجل" : "البريد الإلكتروني"}
                 </label>
                 <div className="relative">
-                  <UserIcon className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <Mail className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
                   <input
                     type="text"
                     required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="أدخل اسمك الثلاثي الكامل"
-                    className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none font-semibold text-slate-800"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder={mode === "forgot" ? "أدخل بريدك مثل name@example.com أو اسم المستخدم" : "name@example.com"}
+                    className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none font-semibold text-slate-800 dir-ltr text-right"
                   />
                 </div>
               </div>
-            )}
 
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                البريد الإلكتروني
-              </label>
-              <div className="relative">
-                <Mail className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none font-semibold text-slate-800 dir-ltr text-right"
-                />
-              </div>
-            </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] font-bold text-slate-700">
+                    {mode === "forgot" ? "كلمة السر الجديدة (6 أحرف على الأقل)" : "كلمة السر"}
+                  </label>
+                  {mode === "login" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("forgot");
+                        setErrorMsg("");
+                        setSuccessMsg("");
+                      }}
+                      className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+                    >
+                      نسيت كلمة السر؟
+                    </button>
+                  )}
+                </div>
 
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-1">كلمة السر</label>
-              <div className="relative">
-                <Lock className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none font-semibold text-slate-800 dir-ltr text-right"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className={`w-full py-2.5 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2 active:scale-98 mt-2 ${
-                mode === "login"
-                  ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs"
-                  : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-extrabold"
-              }`}
-            >
-              {mode === "login" ? <LogIn className="h-4 w-4" /> : <UserPlus className="h-4 w-4 text-indigo-600" />}
-              <span>{submitting ? "جاري المعالجة..." : mode === "login" ? "تسجيل الدخول واسترجاع البيانات" : "إنشاء حساب وحفظ البيانات"}</span>
-            </button>
-
-            <div className="pt-2 border-t border-slate-100 text-center space-y-2">
-              {mode === "login" ? (
-                <p className="text-xs text-slate-500 font-medium">
-                  ليس لديك حساب بعد؟{" "}
+                <div className="relative">
+                  <Lock className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    required
+                    minLength={6}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full pr-9 pl-10 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none font-semibold text-slate-800 dir-ltr text-right"
+                  />
+                  {/* Password Visibility Eye Toggle */}
                   <button
                     type="button"
-                    onClick={() => { setMode("register"); setErrorMsg(""); }}
-                    className="text-indigo-600 font-bold hover:bg-indigo-100/70 bg-indigo-50 px-2.5 py-1 rounded-lg text-xs cursor-pointer transition-colors inline-block mr-1"
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? "إخفاء كلمة السر" : "إظهار كلمة السر"}
+                    className="absolute left-2.5 top-2 p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/50 transition-colors cursor-pointer"
                   >
-                    أنشئ حساباً جديداً
+                    {showPassword ? <EyeOff className="h-4 w-4 text-indigo-600" /> : <Eye className="h-4 w-4" />}
                   </button>
-                </p>
-              ) : (
-                <p className="text-xs text-slate-500 font-medium">
-                  لديك حساب بالفعل؟{" "}
-                  <button
-                    type="button"
-                    onClick={() => { setMode("login"); setErrorMsg(""); }}
-                    className="text-indigo-600 font-bold hover:underline cursor-pointer"
-                  >
-                    تسجيل الدخول
-                  </button>
-                </p>
-              )}
+                </div>
+              </div>
 
               <button
-                type="button"
-                onClick={onClose}
-                className="text-[11px] text-slate-400 hover:text-slate-600 font-semibold cursor-pointer underline hover:no-underline pt-1 block mx-auto"
+                type="submit"
+                disabled={submitting}
+                className={`w-full py-2.5 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2 active:scale-98 mt-2 shadow-xs ${
+                  mode === "login"
+                    ? "bg-indigo-600 hover:bg-indigo-700 text-white"
+                    : mode === "register"
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold"
+                    : "bg-amber-600 hover:bg-amber-700 text-white font-extrabold"
+                }`}
               >
-                تصفح واستخدام التطبيق كزائر الآن
+                {mode === "login" ? (
+                  <LogIn className="h-4 w-4" />
+                ) : mode === "register" ? (
+                  <UserPlus className="h-4 w-4 text-white" />
+                ) : (
+                  <KeyRound className="h-4 w-4 text-white" />
+                )}
+                <span>
+                  {submitting
+                    ? "جاري المعالجة..."
+                    : mode === "login"
+                    ? "تسجيل الدخول واسترجاع البيانات"
+                    : mode === "register"
+                    ? "إنشاء حساب وحفظ البيانات"
+                    : "استرجاع الحساب وتعيين كلمة السر الجديدة"}
+                </span>
               </button>
-            </div>
-          </form>
+
+              <div className="pt-2 border-t border-slate-100 text-center space-y-1.5">
+                {mode === "forgot" && (
+                  <p className="text-xs text-slate-500 font-medium">
+                    تذكرت كلمة السر؟{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("login");
+                        setErrorMsg("");
+                      }}
+                      className="text-indigo-600 font-bold hover:underline cursor-pointer"
+                    >
+                      العودة لتسجيل الدخول
+                    </button>
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="text-[11px] text-slate-400 hover:text-slate-600 font-semibold cursor-pointer underline hover:no-underline pt-1 block mx-auto"
+                >
+                  تصفح واستخدام التطبيق كزائر الآن
+                </button>
+              </div>
+            </form>
+          </div>
         )}
       </div>
     </div>

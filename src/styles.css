@@ -142,6 +142,7 @@
 [data-tint="athkar"]  .tab-icon { --tab-bg: color-mix(in oklch, var(--athkar) 22%, transparent); --tab-fg: color-mix(in oklch, var(--athkar) 55%, var(--foreground)); }
 [data-tint="prayers"] .tab-icon { --tab-bg: color-mix(in oklch, #10b981 22%, transparent); --tab-fg: #047857; }
 [data-tint="habits"]  .tab-icon { --tab-bg: color-mix(in oklch, var(--habits) 25%, transparent); --tab-fg: color-mix(in oklch, var(--habits) 55%, var(--foreground)); }
+[data-tint="nafahat"] .tab-icon { --tab-bg: color-mix(in oklch, #059669 25%, transparent); --tab-fg: #047857; }
 [data-tint="home"]    .tab-icon { --tab-bg: color-mix(in oklch, var(--primary) 22%, transparent); --tab-fg: color-mix(in oklch, var(--primary) 55%, var(--foreground)); }
 
 /* ---------- Home screen ---------- */
@@ -201,6 +202,8 @@
 .home-tile--quran  { --tile-shadow: var(--quran); }
 .home-tile--athkar { --tile-shadow: var(--athkar); }
 .home-tile--habits { --tile-shadow: var(--habits); }
+.home-tile--prayers { --tile-shadow: #10b981; }
+.home-tile--nafahat { --tile-shadow: #059669; }
 
 /* ---------- Screen scaffolding (placeholders) ---------- */
 .screen { padding: 1.5rem 1rem 2rem; }

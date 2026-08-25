@@ -319,7 +319,12 @@ export async function computeWeeklyStats(): Promise<WeeklyStats> {
   // Ratio per day = completed_items_that_day / items.length
   let sum = 0;
   for (const d of elapsed) {
-    const completedCount = rows.filter((r) => r.date === d && r.completed).length;
+    const completedCount = rows.filter((r) => {
+      if (r.date !== d) return false;
+      if (r.completed) return true;
+      const it = items.find((item) => item.id === r.thikr_item_id);
+      return it && (r.current_count || 0) >= it.target_count;
+    }).length;
     sum += Math.min(1, completedCount / items.length);
   }
   const percent = Math.round((sum / elapsed.length) * 100);
