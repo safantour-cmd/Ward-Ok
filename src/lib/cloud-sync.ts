@@ -1,5 +1,5 @@
 import { doc, getDoc, setDoc } from "firebase/firestore";
-import { dbFirestore } from "./firebase";
+import { dbFirestore, pauseFirestoreNetwork, resumeFirestoreNetwork } from "./firebase";
 import {
   db,
   type PrayerLog,
@@ -16,6 +16,7 @@ import {
 
 let quotaExceededCooldownUntil = 0;
 let syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSyncedDataSignature = "";
 
 export function isQuotaExceeded(): boolean {
   if (typeof window === "undefined") return false;
@@ -24,19 +25,24 @@ export function isQuotaExceeded(): boolean {
     const num = parseInt(stored, 10);
     if (!isNaN(num)) {
       if (Date.now() < num) return true;
-      else localStorage.removeItem("firestore_quota_cooldown_until");
+      else {
+        localStorage.removeItem("firestore_quota_cooldown_until");
+        resumeFirestoreNetwork().catch(() => {});
+      }
     }
   }
   return Date.now() < quotaExceededCooldownUntil;
 }
 
-export function setQuotaExceededCooldown(hours = 12): void {
+export function setQuotaExceededCooldown(hours = 24): void {
   const until = Date.now() + hours * 60 * 60 * 1000;
   quotaExceededCooldownUntil = until;
   if (typeof window !== "undefined") {
     localStorage.setItem("firestore_quota_cooldown_until", String(until));
   }
+  pauseFirestoreNetwork().catch(() => {});
 }
+
 
 export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
   if (!db || !userId) return false;
@@ -88,6 +94,24 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
       }
     }
 
+    // Generate lightweight content signature to avoid writing if local data has not changed
+    const contentSignature = JSON.stringify({
+      tp: thikrProgress.length,
+      tpLast: thikrProgress.slice(-5),
+      pl: prayerLogs.length,
+      plLast: prayerLogs.slice(-5),
+      chp: customHabitProgress.length,
+      chpLast: customHabitProgress.slice(-5),
+      qdr: quranDailyReading.length,
+      nl: nafahatLogs.length,
+      nlLast: nafahatLogs.slice(-5),
+    });
+
+    if (contentSignature === lastSyncedDataSignature) {
+      // Nothing changed in data since last push; skip remote Firestore write
+      return true;
+    }
+
     const dataPayload = JSON.parse(
       JSON.stringify({
         thikrItems,
@@ -104,30 +128,16 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
       })
     );
 
-    // Primary write: user_data document for user
+    // Primary single write to user_data collection
     const userDataRef = doc(dbFirestore, "user_data", userId);
     await setDoc(userDataRef, dataPayload, { merge: true });
 
-    // Secondary write if account ID differs
-    const savedSession = typeof window !== "undefined" ? localStorage.getItem("app_account_session") : null;
-    if (savedSession) {
-      try {
-        const parsed = JSON.parse(savedSession);
-        if (parsed?.email) {
-          const cleanEmail = parsed.email.trim().toLowerCase();
-          const accDocId = "acc_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
-          if (accDocId !== userId) {
-            await setDoc(doc(dbFirestore, "user_data", accDocId), dataPayload, { merge: true });
-          }
-        }
-      } catch (e) {}
-    }
-
+    lastSyncedDataSignature = contentSignature;
     return true;
   } catch (error: any) {
     const errStr = String(error?.message || error || "");
     if (errStr.includes("resource-exhausted") || errStr.includes("Quota limit exceeded") || errStr.includes("quota")) {
-      console.warn("Firestore daily quota limit reached. Application will continue saving data locally on device.");
+      console.warn("Firestore daily quota limit reached. Data is safely stored locally on device.");
       setQuotaExceededCooldown(12);
     } else {
       console.error("Failed to push local data to cloud:", error);
@@ -145,11 +155,11 @@ export function pushLocalToCloud(userId: string): Promise<boolean> {
     if (syncDebounceTimer) {
       clearTimeout(syncDebounceTimer);
     }
-    // 2s debounce to avoid quota exhaust on rapid taps
+    // 3.5s debounce to batch rapid updates and conserve quota
     syncDebounceTimer = setTimeout(async () => {
       const res = await pushLocalToCloudDirect(userId);
       resolve(res);
-    }, 2000);
+    }, 3500);
   });
 }
 

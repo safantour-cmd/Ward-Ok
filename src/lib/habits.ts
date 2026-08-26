@@ -2,13 +2,20 @@ import { db, type CustomHabit, type CustomHabitProgress, type CustomHabitWeeklyE
 import { isoDate, startOfWeek, endOfWeek, weekDays } from "./date-utils";
 import { collection, getDocs, setDoc, doc } from "firebase/firestore";
 import { dbFirestore } from "./firebase";
-import { autoCloudSync } from "./cloud-sync";
+import { autoCloudSync, isQuotaExceeded, setQuotaExceededCooldown } from "./cloud-sync";
 
 /** ---------- List & CRUD ---------- */
 
 export async function syncGlobalHabitsFromCloud(): Promise<void> {
+  if (isQuotaExceeded()) return;
   try {
-    const querySnapshot = await getDocs(collection(dbFirestore, "global_habits")).catch(() => null);
+    const querySnapshot = await getDocs(collection(dbFirestore, "global_habits")).catch((err: any) => {
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(24);
+      }
+      return null;
+    });
     if (!querySnapshot) return;
     const globalItems: Array<Partial<CustomHabit> & { global_id: string }> = [];
     querySnapshot.forEach((docSnap) => {

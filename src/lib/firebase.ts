@@ -1,7 +1,29 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
+import { getFirestore, doc, getDocFromServer, setLogLevel, disableNetwork, enableNetwork } from "firebase/firestore";
 import firebaseConfigJson from "../../firebase-applet-config.json";
+
+try {
+  setLogLevel("silent");
+} catch (e) {}
+
+// Intercept window uncaught errors & console error spam for firestore quota limit to prevent console flooding
+if (typeof window !== "undefined") {
+  const originalConsoleError = console.error;
+  console.error = function (...args: any[]) {
+    const msg = args.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+    if (
+      msg.includes("resource-exhausted") ||
+      msg.includes("Quota limit exceeded") ||
+      msg.includes("Free daily write units per project") ||
+      msg.includes("Using maximum backoff delay to prevent overloading")
+    ) {
+      // Gracefully silent repetitive quota logs in console
+      return;
+    }
+    originalConsoleError.apply(console, args);
+  };
+}
 
 const firebaseConfig = {
   apiKey: firebaseConfigJson.apiKey,
@@ -22,6 +44,31 @@ export const dbFirestore = firebaseConfigJson.firestoreDatabaseId
   ? getFirestore(app, firebaseConfigJson.firestoreDatabaseId)
   : getFirestore(app);
 
+// Check if quota cooldown is currently active in localStorage
+if (typeof window !== "undefined") {
+  try {
+    const stored = localStorage.getItem("firestore_quota_cooldown_until");
+    if (stored) {
+      const num = parseInt(stored, 10);
+      if (!isNaN(num) && Date.now() < num) {
+        disableNetwork(dbFirestore).catch(() => {});
+      }
+    }
+  } catch (e) {}
+}
+
+export async function pauseFirestoreNetwork() {
+  try {
+    await disableNetwork(dbFirestore);
+  } catch (e) {}
+}
+
+export async function resumeFirestoreNetwork() {
+  try {
+    await enableNetwork(dbFirestore);
+  } catch (e) {}
+}
+
 // Test connection function as required by firebase skill
 export async function testFirestoreConnection() {
   try {
@@ -32,3 +79,4 @@ export async function testFirestoreConnection() {
     }
   }
 }
+

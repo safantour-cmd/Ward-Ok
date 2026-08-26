@@ -84,7 +84,7 @@ export function NafahatCounterOverlay({
   return (
     <div
       dir="rtl"
-      className="fixed inset-0 z-50 flex flex-col bg-gradient-to-b from-emerald-400 via-teal-500 to-emerald-600 text-white select-none overflow-hidden animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex flex-col bg-gradient-to-b from-[#388e6c] via-[#2f7d5e] to-[#225741] text-white select-none overflow-hidden animate-in fade-in duration-200"
     >
       {/* 
         ========================================================================
@@ -93,8 +93,8 @@ export function NafahatCounterOverlay({
       */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         {/* Soft emerald radial glow in the center */}
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-100/30 rounded-full blur-3xl" />
-        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-80 h-80 bg-teal-100/25 rounded-full blur-2xl" />
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-200/20 rounded-full blur-3xl" />
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-80 h-80 bg-teal-200/20 rounded-full blur-2xl" />
 
         {/* Left Side: Palm Tree */}
         <div className="absolute -bottom-6 -left-8 w-44 sm:w-60 h-72 sm:h-96 opacity-35 pointer-events-none select-none transition-opacity">
@@ -251,8 +251,8 @@ export function NafahatCounterOverlay({
 
             {/* Inner Counter Sphere */}
             <div
-              className={`absolute inset-5 rounded-full grid place-items-center bg-gradient-to-br from-emerald-500/95 to-teal-700/95 backdrop-blur-md shadow-2xl border border-white/50 transition-transform duration-100 ${
-                pulse ? "scale-[0.95] bg-emerald-400/95" : "scale-100"
+              className={`absolute inset-5 rounded-full grid place-items-center bg-gradient-to-br from-[#40916c]/95 to-[#1b4332]/95 backdrop-blur-md shadow-2xl border border-white/40 transition-transform duration-100 ${
+                pulse ? "scale-[0.95] bg-[#52b788]/95" : "scale-100"
               }`}
             >
               <div className="text-center px-4">

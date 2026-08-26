@@ -8,7 +8,7 @@ import {
 } from "firebase/auth";
 import { doc, setDoc, getDoc, collection, getDocs } from "firebase/firestore";
 import { auth, dbFirestore } from "@/lib/firebase";
-import { pullCloudToLocal, pushLocalToCloud } from "@/lib/cloud-sync";
+import { pullCloudToLocal, pushLocalToCloud, isQuotaExceeded } from "@/lib/cloud-sync";
 
 export interface AppUser {
   uid: string;
@@ -100,6 +100,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentUser || !currentUser.uid) return;
 
     const interval = setInterval(() => {
+      if (isQuotaExceeded()) return;
       pushLocalToCloud(currentUser.uid)
         .then(() => {
           setLastSyncedAt(new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }));
@@ -108,7 +109,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, 180000);
 
     const handleVisibility = () => {
-      if (document.visibilityState === "hidden") {
+      if (document.visibilityState === "hidden" && !isQuotaExceeded()) {
         pushLocalToCloud(currentUser.uid).catch(() => {});
       }
     };
@@ -189,9 +190,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem("app_account_session", JSON.stringify(appUser));
 
     await pushLocalToCloud(finalUid);
-    if (finalUid !== accDocId) {
-      await pushLocalToCloud(accDocId);
-    }
 
     setLastSyncedAt(new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }));
     setSyncing(false);

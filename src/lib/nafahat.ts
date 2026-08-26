@@ -2,6 +2,7 @@ import { db, type NafahatDailyLog } from "./db";
 import { isoDate } from "./date-utils";
 import { collection, getDocs, doc, getDoc, setDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { dbFirestore } from "./firebase";
+import { isQuotaExceeded, setQuotaExceededCooldown } from "./cloud-sync";
 
 export interface GlobalHadayaItem {
   id: string;
@@ -486,9 +487,18 @@ export function getStoredSalawatFormulas(): SalawatFormula[] {
 export let SALAWAT_FORMULAS: SalawatFormula[] = getStoredSalawatFormulas();
 
 export async function fetchGlobalSalawatFormulas(): Promise<SalawatFormula[]> {
+  if (isQuotaExceeded()) {
+    return getStoredSalawatFormulas();
+  }
   try {
-    const snap = await getDoc(doc(dbFirestore, "global_config", "salawat_formulas"));
-    if (snap.exists()) {
+    const snap = await getDoc(doc(dbFirestore, "global_config", "salawat_formulas")).catch((err: any) => {
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(24);
+      }
+      return null;
+    });
+    if (snap && snap.exists()) {
       const data = snap.data();
       if (data && Array.isArray(data.formulas) && data.formulas.length > 0) {
         const list = data.formulas as SalawatFormula[];
@@ -509,8 +519,13 @@ export function subscribeGlobalSalawatFormulas(cb: (formulas: SalawatFormula[]) 
   // initial call immediately from stored/cached
   cb(getStoredSalawatFormulas());
 
+  if (isQuotaExceeded()) {
+    return () => {};
+  }
+
+  let unsub = () => {};
   try {
-    const unsub = onSnapshot(
+    unsub = onSnapshot(
       doc(dbFirestore, "global_config", "salawat_formulas"),
       (snap) => {
         if (snap.exists()) {
@@ -528,12 +543,15 @@ export function subscribeGlobalSalawatFormulas(cb: (formulas: SalawatFormula[]) 
         cb(getStoredSalawatFormulas());
       },
       (err) => {
-        console.error("Failed to subscribe to global salawat formulas:", err);
+        const errStr = String(err?.message || err || "");
+        if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+          setQuotaExceededCooldown(24);
+          unsub();
+        }
       }
     );
     return unsub;
   } catch (err) {
-    console.error("Error setting up salawat formulas subscription:", err);
     return () => {};
   }
 }
@@ -1360,17 +1378,65 @@ export function setFormulaSalawatCountDirect(dateStr: string, formulaDay: number
   window.dispatchEvent(new CustomEvent("nafahat-formula-count-updated", { detail: { dateStr, formulaDay, count } }));
 }
 
-export function getGeneralSalawatDailyGoal(): number {
+export function getGeneralSalawatDailyGoal(dateStr?: string): number {
   if (typeof window === "undefined") return 500;
+  if (dateStr) {
+    const specific = localStorage.getItem(`nafahat_general_goal_${dateStr}`);
+    if (specific) {
+      const val = parseInt(specific, 10);
+      if (!isNaN(val) && val > 0) return val;
+    }
+  }
   const saved = localStorage.getItem("nafahat_general_salawat_daily_goal");
   return saved ? parseInt(saved, 10) || 500 : 500;
 }
 
-export function setGeneralSalawatDailyGoal(goal: number): void {
-  if (typeof window === "undefined") return;
+/**
+ * Total Rabis (Rabi I + Rabi II = 60 days) goal recalculator
+ */
+export function recalculateTotalRabiGoal(newDailyGoal: number, currentDay: number = 1, onlyThisDay: boolean = false): number {
+  const totalDays = 60; // Rabi' al-Awwal + Rabi' al-Thani = 60 days
+  const defaultGoal = getGeneralSalawatDailyGoal();
+  if (onlyThisDay) {
+    return Math.max(1, defaultGoal * (totalDays - 1) + newDailyGoal);
+  }
+  const safeDay = Math.max(1, Math.min(totalDays, currentDay));
+  const pastDays = safeDay - 1;
+  const remainingDays = totalDays - pastDays;
+  
+  const pastSum = pastDays * defaultGoal;
+  const futureSum = remainingDays * newDailyGoal;
+  return Math.max(1, pastSum + futureSum);
+}
+
+export function setGeneralSalawatDailyGoal(
+  goal: number,
+  dateStr?: string,
+  onlyThisDay: boolean = false,
+  currentDayNum: number = 1
+): number {
+  if (typeof window === "undefined") return goal;
   const valid = Math.max(1, goal);
-  localStorage.setItem("nafahat_general_salawat_daily_goal", String(valid));
-  window.dispatchEvent(new CustomEvent("nafahat-daily-goal-updated", { detail: { type: "general", goal: valid } }));
+
+  if (onlyThisDay && dateStr) {
+    localStorage.setItem(`nafahat_general_goal_${dateStr}`, String(valid));
+  } else {
+    localStorage.setItem("nafahat_general_salawat_daily_goal", String(valid));
+    if (dateStr) {
+      localStorage.removeItem(`nafahat_general_goal_${dateStr}`);
+    }
+  }
+
+  // Calculate new 60-day goal for both Rabis (ربيع الأول وربيع الثاني)
+  const calculatedTotalGoal = recalculateTotalRabiGoal(valid, currentDayNum, onlyThisDay);
+  localStorage.setItem("nafahat_monthly_salawat_goal", String(calculatedTotalGoal));
+
+  window.dispatchEvent(
+    new CustomEvent("nafahat-daily-goal-updated", {
+      detail: { type: "general", goal: valid, totalGoal: calculatedTotalGoal, dateStr, onlyThisDay },
+    })
+  );
+  return calculatedTotalGoal;
 }
 
 export function getFormulaSalawatDailyGoal(formulaDay: number, defaultRecommended: number = 100): number {
@@ -1384,6 +1450,29 @@ export function setFormulaSalawatDailyGoal(formulaDay: number, goal: number): vo
   const valid = Math.max(1, goal);
   localStorage.setItem(`nafahat_formula_daily_goal_day${formulaDay}`, String(valid));
   window.dispatchEvent(new CustomEvent("nafahat-daily-goal-updated", { detail: { type: "formula", formulaDay, goal: valid } }));
+}
+
+/**
+ * Total season salawat across Rabi' I and Rabi' II (General + Daily Formulas)
+ */
+export async function getTotalSalawatSeason(): Promise<number> {
+  if (!db) return 0;
+  const allLogs = await db.nafahat_logs.toArray();
+  const generalSum = allLogs.reduce((sum, item) => sum + (item.salawat_count || 0), 0);
+  
+  let formulaSum = 0;
+  if (typeof window !== "undefined") {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("nafahat_formula_salawat_")) {
+          const val = parseInt(localStorage.getItem(key) || "0", 10);
+          if (!isNaN(val)) formulaSum += val;
+        }
+      }
+    } catch {}
+  }
+  return generalSum + formulaSum;
 }
 
 /**
@@ -1471,9 +1560,18 @@ export function getDefaultGlobalHadayaList(): GlobalHadayaItem[] {
  */
 
 export async function fetchGlobalHadaya(): Promise<GlobalHadayaItem[]> {
+  if (isQuotaExceeded()) {
+    return getDefaultGlobalHadayaList();
+  }
   try {
     // 1. Try unified ordered list document
-    const configSnap = await getDoc(doc(dbFirestore, "global_config", "hadaya_list")).catch(() => null);
+    const configSnap = await getDoc(doc(dbFirestore, "global_config", "hadaya_list")).catch((err: any) => {
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(24);
+      }
+      return null;
+    });
     if (configSnap && configSnap.exists()) {
       const d = configSnap.data();
       if (d && Array.isArray(d.items) && d.items.length > 0) {
@@ -1492,24 +1590,32 @@ export async function fetchGlobalHadaya(): Promise<GlobalHadayaItem[]> {
     }
 
     // 2. Fallback to individual collection
-    const snap = await getDocs(collection(dbFirestore, "global_hadaya"));
-    const list: GlobalHadayaItem[] = [];
-    snap.forEach((docSnap) => {
-      const d = docSnap.data();
-      if (d && d.title) {
-        list.push({
-          id: docSnap.id,
-          order: d.order || list.length + 1,
-          day: d.day || d.order || list.length + 1,
-          title: d.title,
-          hadith_text: d.hadith_text || d.hadithText || "",
-          benefit: d.benefit || d.scholarBenefit || "",
-          target_type: d.target_type || "day_of_year",
-          target_value: String(d.target_value || list.length + 1),
-          created_at: d.created_at || new Date().toISOString(),
-        });
+    const snap = await getDocs(collection(dbFirestore, "global_hadaya")).catch((err: any) => {
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(24);
       }
+      return null;
     });
+    const list: GlobalHadayaItem[] = [];
+    if (snap) {
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        if (d && d.title) {
+          list.push({
+            id: docSnap.id,
+            order: d.order || list.length + 1,
+            day: d.day || d.order || list.length + 1,
+            title: d.title,
+            hadith_text: d.hadith_text || d.hadithText || "",
+            benefit: d.benefit || d.scholarBenefit || "",
+            target_type: d.target_type || "day_of_year",
+            target_value: String(d.target_value || list.length + 1),
+            created_at: d.created_at || new Date().toISOString(),
+          });
+        }
+      });
+    }
 
     if (list.length > 0) {
       list.sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -1524,9 +1630,17 @@ export async function fetchGlobalHadaya(): Promise<GlobalHadayaItem[]> {
 }
 
 export function subscribeGlobalHadaya(cb: (items: GlobalHadayaItem[]) => void): () => void {
+  // Always emit default first
+  cb(getDefaultGlobalHadayaList());
+
+  if (isQuotaExceeded()) {
+    return () => {};
+  }
+
+  let unsubDoc = () => {};
   try {
     // Subscribe to the unified document
-    const unsubDoc = onSnapshot(
+    unsubDoc = onSnapshot(
       doc(dbFirestore, "global_config", "hadaya_list"),
       (docSnap) => {
         if (docSnap.exists()) {
@@ -1551,14 +1665,17 @@ export function subscribeGlobalHadaya(cb: (items: GlobalHadayaItem[]) => void): 
         cb(getDefaultGlobalHadayaList());
       },
       (err) => {
-        console.error("Error in hadaya_list doc subscription, falling back:", err);
+        const errStr = String(err?.message || err || "");
+        if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+          setQuotaExceededCooldown(24);
+          unsubDoc();
+        }
         cb(getDefaultGlobalHadayaList());
       }
     );
 
     return unsubDoc;
   } catch (err) {
-    console.error("Error setting up global hadaya subscription:", err);
     cb(getDefaultGlobalHadayaList());
     return () => {};
   }

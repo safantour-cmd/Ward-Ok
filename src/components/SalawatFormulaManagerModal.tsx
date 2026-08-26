@@ -79,7 +79,7 @@ export function SalawatFormulaManagerModal({
   const [editArabicText, setEditArabicText] = useState("");
   const [editSource, setEditSource] = useState("");
   const [editMerit, setEditMerit] = useState("");
-  const [editRecommendedCount, setEditRecommendedCount] = useState<number>(100);
+  const [editRecommendedCount, setEditRecommendedCount] = useState<string>("100");
 
   // Quick Swap Bar State
   const [swapDayA, setSwapDayA] = useState<number>(1);
@@ -103,7 +103,7 @@ export function SalawatFormulaManagerModal({
     setEditArabicText(formula.arabicText);
     setEditSource(formula.source || "");
     setEditMerit(formula.merit || "");
-    setEditRecommendedCount(formula.recommendedCount || 100);
+    setEditRecommendedCount(String(formula.recommendedCount || 100));
     setActiveTab("edit");
     setFeedbackMsg(null);
   };
@@ -126,6 +126,9 @@ export function SalawatFormulaManagerModal({
       return;
     }
 
+    const parsedCount = parseInt(editRecommendedCount, 10);
+    const validCount = !isNaN(parsedCount) && parsedCount > 0 ? parsedCount : 100;
+
     setIsSubmitting(true);
     setFeedbackMsg(null);
 
@@ -135,7 +138,7 @@ export function SalawatFormulaManagerModal({
         arabicText: editArabicText.trim(),
         source: editSource.trim(),
         merit: editMerit.trim(),
-        recommendedCount: Number(editRecommendedCount) > 0 ? Number(editRecommendedCount) : 100,
+        recommendedCount: validCount,
       });
 
       // Update local state as well
@@ -148,7 +151,7 @@ export function SalawatFormulaManagerModal({
                 arabicText: editArabicText.trim(),
                 source: editSource.trim(),
                 merit: editMerit.trim(),
-                recommendedCount: Number(editRecommendedCount) > 0 ? Number(editRecommendedCount) : 100,
+                recommendedCount: validCount,
               }
             : item
         )
@@ -839,7 +842,7 @@ export function SalawatFormulaManagerModal({
                     max={100000}
                     step={10}
                     value={editRecommendedCount}
-                    onChange={(e) => setEditRecommendedCount(Number(e.target.value))}
+                    onChange={(e) => setEditRecommendedCount(e.target.value)}
                     required
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500/30"
                   />

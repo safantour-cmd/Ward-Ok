@@ -208,9 +208,12 @@ function NafahatScreen() {
   // Modal to edit daily goals ("general" | "formula" | null)
   const [showEditDailyGoalModal, setShowEditDailyGoalModal] = useState<"general" | "formula" | null>(null);
   const [customDailyGoalInput, setCustomDailyGoalInput] = useState("");
+  const [onlyThisDayOption, setOnlyThisDayOption] = useState(false);
+  const [showProgressDetailToast, setShowProgressDetailToast] = useState(false);
 
   const handleOpenEditDailyGoal = (type: "general" | "formula") => {
     setShowEditDailyGoalModal(type);
+    setOnlyThisDayOption(false);
     setCustomDailyGoalInput(type === "general" ? String(generalDailyGoal) : String(formulaDailyGoal));
   };
 
@@ -218,8 +221,9 @@ function NafahatScreen() {
     const num = parseInt(customDailyGoalInput, 10);
     if (!isNaN(num) && num > 0) {
       if (showEditDailyGoalModal === "general") {
-        setGeneralSalawatDailyGoal(num);
+        const newTotalGoal = setGeneralSalawatDailyGoal(num, selectedDate, onlyThisDayOption, currentRabiDayNum);
         setGeneralDailyGoal(num);
+        setMonthlyGoal(newTotalGoal);
       } else if (showEditDailyGoalModal === "formula") {
         setFormulaSalawatDailyGoal(selectedFormulaDay, num);
         setFormulaDailyGoal(num);
@@ -692,7 +696,7 @@ function NafahatScreen() {
                         <Award className="h-3.5 w-3.5" />
                       </span>
                       <span className="font-black text-emerald-950">
-                        الهدف الشهري:
+                        الهدف الشامل لربيعين (٦٠ يوماً):
                       </span>
                       <span className="font-black text-emerald-900 font-mono">
                         {monthlyGoal.toLocaleString("ar-EG")} صلاة
@@ -704,7 +708,7 @@ function NafahatScreen() {
                           setShowEditGoalModal(true);
                         }}
                         className="p-1 rounded-md text-slate-500 hover:text-emerald-800 hover:bg-emerald-100/80 transition-colors cursor-pointer"
-                        title="تعديل الهدف الشهري"
+                        title="تعديل الهدف الشامل"
                       >
                         <Edit3 className="h-3 w-3" />
                       </button>
@@ -718,8 +722,12 @@ function NafahatScreen() {
                     </div>
                   </div>
 
-                  {/* Progress Bar with percentage written directly inside on the green line */}
-                  <div className="w-full bg-slate-200/90 rounded-full h-5 overflow-hidden shadow-inner relative flex items-center justify-center">
+                  {/* Progress Bar with percentage written directly inside on the green line - Clickable to reveal raw count */}
+                  <div
+                    onClick={() => setShowProgressDetailToast((prev) => !prev)}
+                    className="w-full bg-slate-200/90 rounded-full h-5 overflow-hidden shadow-inner relative flex items-center justify-center cursor-pointer hover:ring-2 hover:ring-emerald-400/40 transition-all"
+                    title="انقر لعرض العدد الفعلي المنجز بالتفصيل"
+                  >
                     <div
                       className="absolute inset-y-0 right-0 bg-gradient-to-l from-emerald-500 via-emerald-600 to-teal-600 rounded-full transition-all duration-500"
                       style={{ width: `${Math.min(100, Math.max(monthlyGoalPct, 0))}%` }}
@@ -728,6 +736,31 @@ function NafahatScreen() {
                       {monthlyGoalPct}%
                     </span>
                   </div>
+
+                  {/* Detail popover on click */}
+                  {showProgressDetailToast && (
+                    <div className="mt-2 p-2.5 bg-white rounded-xl border border-emerald-300 shadow-xs flex items-center justify-between text-xs animate-in fade-in slide-in-from-top-1 duration-150">
+                      <div className="flex items-center gap-2 font-black text-emerald-950">
+                        <Sparkles className="h-4 w-4 text-emerald-600 shrink-0" />
+                        <span className="text-xs font-bold text-slate-700">
+                          الصلوات المنجزة:
+                        </span>
+                        <span className="text-emerald-800 font-mono text-sm font-black bg-emerald-50 px-2.5 py-0.5 rounded-lg border border-emerald-200">
+                          {monthTotalSalawat.toLocaleString("ar-EG")} صلاة
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowProgressDetailToast(false);
+                        }}
+                        className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer rounded-lg hover:bg-slate-100"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1286,18 +1319,18 @@ function NafahatScreen() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs font-black text-slate-900">
                 {showEditDailyGoalModal === "general"
-                  ? "تحديد الهدف اليومي للصلاة العامة"
+                  ? `تحديد هدف اليوم (${formatRabiDayShort(currentRabiDayNum)})`
                   : `تحديد هدف صيغة ${formatRabiDayShort(selectedFormulaDay)}`}
               </h3>
               <button
                 onClick={() => setShowEditDailyGoalModal(null)}
-                className="p-1 rounded-lg text-slate-400 hover:bg-slate-100"
+                className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <p className="text-[11px] text-slate-500 mb-3">
+            <p className="text-[11px] text-slate-500 mb-2.5">
               حدد عدد التكرار اليومي الذي ترغب في الالتزام به:
             </p>
 
@@ -1306,10 +1339,22 @@ function NafahatScreen() {
               min="1"
               value={customDailyGoalInput}
               onChange={(e) => setCustomDailyGoalInput(e.target.value)}
-              className="w-full text-center font-mono text-xl font-black p-3 rounded-2xl border border-emerald-500/30 bg-emerald-50/40 text-emerald-950 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 mb-4"
+              className="w-full text-center font-mono text-xl font-black p-3 rounded-2xl border border-emerald-500/30 bg-emerald-50/40 text-emerald-950 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 mb-3"
               placeholder="100"
               autoFocus
             />
+
+            {showEditDailyGoalModal === "general" && (
+              <label className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer select-none text-[11px] font-bold text-slate-800 hover:bg-emerald-50/50 transition-colors mb-4">
+                <input
+                  type="checkbox"
+                  checked={onlyThisDayOption}
+                  onChange={(e) => setOnlyThisDayOption(e.target.checked)}
+                  className="h-4 w-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
+                />
+                <span>تعديل هذا اليوم فقط (دون التأثير على باقي الأيام)</span>
+              </label>
+            )}
 
             <div className="flex gap-2">
               <button

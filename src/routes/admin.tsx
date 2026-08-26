@@ -2,13 +2,15 @@ import React, { useState, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { collection, getDocs, doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
 import { dbFirestore } from "@/lib/firebase";
-import { setQuotaExceededCooldown } from "@/lib/cloud-sync";
+import { isQuotaExceeded, setQuotaExceededCooldown } from "@/lib/cloud-sync";
 import { useAuth, getAccountDocId } from "@/context/AuthContext";
 import { createGlobalHabit, updateGlobalHabit, deleteGlobalHabit } from "@/lib/habits";
 import { createGlobalThikr, updateGlobalThikr, deleteGlobalThikr } from "@/lib/athkar";
 import {
   type GlobalHadayaItem,
   type SalawatFormula,
+  type RegularSunnahItem,
+  DEFAULT_REGULAR_SUNNAHS,
   DEFAULT_RARE_SUNNAHS,
   PROPHETIC_GIFT_PRESETS,
   subscribeGlobalHadaya,
@@ -579,7 +581,19 @@ function getPctTextColorClass(pct: number) {
   return "text-emerald-600 font-black";
 }
 
-function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: { member: UserProfileDoc; uData?: UserCloudData; activeCategory?: string; uniqueDates?: string[] }) {
+function MemberDetailView({
+  member,
+  uData,
+  activeCategory,
+  uniqueDates = [],
+  singleDate,
+}: {
+  member: UserProfileDoc;
+  uData?: UserCloudData;
+  activeCategory?: string;
+  uniqueDates?: string[];
+  singleDate?: string;
+}) {
   if (!uData) {
     return (
       <div className="p-4 bg-slate-50 rounded-2xl text-center text-xs text-slate-500 font-medium my-2">
@@ -588,7 +602,18 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
     );
   }
 
-  const s = getOverallMemberStats(uData, uniqueDates);
+  const s = singleDate
+    ? {
+        ...getMemberStatsForDate(uData, singleDate),
+        totalAvgPct: getMemberStatsForDate(uData, singleDate).totalAvg,
+        sumSalawat: getMemberStatsForDate(uData, singleDate).salawatCount,
+        avgSalawatPerDay: getMemberStatsForDate(uData, singleDate).salawatCount,
+        sumSunnahDone: getMemberStatsForDate(uData, singleDate).sunnahDoneCount,
+        sumHadayaRevived: getMemberStatsForDate(uData, singleDate).hadayaRevivedCount,
+        submittedDaysCount: hasMemberSubmittedOnDate(uData, singleDate) ? 1 : 0,
+        activeNafahatDays: (getMemberStatsForDate(uData, singleDate).salawatCount > 0 || getMemberStatsForDate(uData, singleDate).sunnahDoneCount > 0) ? 1 : 0,
+      }
+    : getOverallMemberStats(uData, uniqueDates);
 
   // 1. Quran
   let selectedSurahIds: number[] = [];
@@ -629,7 +654,9 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
 
   // Unified list of dates for daily breakdown - sorted from smallest/earliest date to largest (e.g. 3, 4, 5)
   const todayStr = isoDate();
-  const displayDates = uniqueDates.length > 0 
+  const displayDates = singleDate
+    ? [singleDate]
+    : uniqueDates.length > 0 
     ? [...uniqueDates].filter((d) => d <= todayStr).sort((a, b) => a.localeCompare(b))
     : Array.from(new Set([
         todayStr,
@@ -931,7 +958,7 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
         <div className="p-3 bg-white rounded-xl border border-rose-200/80 space-y-2">
           <div className="flex items-center justify-between pb-1 border-b border-rose-100">
             <h4 className="text-xs font-black text-rose-900 flex items-center gap-1">
-              🌸 الصلاة على النبي ﷺ (نفحات ربيعية) - المتابعة اليومية
+              <Heart className="h-3.5 w-3.5 text-rose-700 fill-rose-100" /> ورد الصلاة على النبي ﷺ - المتابعة اليومية
             </h4>
             <div className="flex items-center gap-1.5 text-[10px]">
               <span className="font-bold text-rose-800 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
@@ -964,7 +991,7 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
                         </span>
                       ) : (
                         <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-400">
-                          لم يسجل صلاة على النبي
+                          لم يسجل صلاة على النبي ✗
                         </span>
                       )}
                     </div>
@@ -986,7 +1013,7 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
         <div className="p-3 bg-white rounded-xl border border-teal-200/80 space-y-2">
           <div className="flex items-center justify-between pb-1 border-b border-teal-100">
             <h4 className="text-xs font-black text-teal-900 flex items-center gap-1">
-              🌿 السنن والهدايا النبوية (نفحات ربيعية) - المتابعة اليومية
+              <Heart className="h-3.5 w-3.5 text-teal-700" /> السنن الراتبة والهدايا النبوية - المتابعة اليومية
             </h4>
             <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
               المعدل: {s.sunnahPct}% ({s.sumSunnahDone} سنّة + {s.sumHadayaRevived} هدية ⭐)
@@ -998,8 +1025,14 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
               {displayDates.map((dateStr) => {
                 const dayStats = getMemberStatsForDate(uData, dateStr);
                 const nLog = uData?.nafahatLogs?.find((n: any) => n.date === dateStr);
-                const sunCount = Array.isArray(nLog?.regular_sunnah_ids) ? nLog.regular_sunnah_ids.length : 0;
+                const sunnahIds = Array.isArray(nLog?.regular_sunnah_ids) ? nLog.regular_sunnah_ids : [];
+                const sunCount = sunnahIds.length;
                 const hasRevivedGift = nLog?.rare_sunnah_ratings && Object.keys(nLog.rare_sunnah_ratings).length > 0;
+                
+                const doneSunnahNames = sunnahIds.map((id: string) => {
+                  const found = DEFAULT_REGULAR_SUNNAHS.find((item) => item.id === id);
+                  return found ? found.title : id;
+                });
 
                 return (
                   <div key={dateStr} className="flex flex-wrap items-center justify-between p-2 bg-teal-50/40 rounded-lg border border-teal-100 gap-1.5">
@@ -1008,9 +1041,22 @@ function MemberDetailView({ member, uData, activeCategory, uniqueDates = [] }: {
                       <span className="text-slate-500 font-mono text-[10px] dir-ltr">({dateStr})</span>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5 font-bold text-[10px]">
-                      <span className={`px-2 py-0.5 rounded ${sunCount > 0 ? "bg-teal-100 text-teal-950 font-black border border-teal-200" : "bg-slate-100 text-slate-400"}`}>
-                        السنن اليومية: {sunCount} سنن ✓
-                      </span>
+                      {sunCount > 0 ? (
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className="px-2 py-0.5 rounded bg-teal-100 text-teal-950 font-black border border-teal-200">
+                            السنن ({sunCount}):
+                          </span>
+                          {doneSunnahNames.map((name: string, i: number) => (
+                            <span key={i} className="px-1.5 py-0.5 rounded bg-white text-teal-900 border border-teal-200 font-bold">
+                              {name} ✓
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-400">
+                          لم تسجل سنن اليوم ✗
+                        </span>
+                      )}
                       {hasRevivedGift && (
                         <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-950 font-black border border-amber-300">
                           ⭐ أحيا الهدية النبوية
@@ -1538,6 +1584,705 @@ function AllUserHabitsModal({ isOpen, onClose, members, userDataMap, globalHabit
   );
 }
 
+function DateHabitsModal({
+  dateStr,
+  members,
+  userDataMap,
+  onClose,
+}: {
+  dateStr: string;
+  members: UserProfileDoc[];
+  userDataMap: Record<string, UserCloudData>;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [filterMode, setFilterMode] = useState<"all" | "done" | "not_done">("all");
+
+  const memberHabitData = members.map((m) => {
+    const uData = getUserDataForMember(m, userDataMap);
+    const stats = getMemberStatsForDate(uData, dateStr);
+    const customHabits = uData?.customHabits && Array.isArray(uData.customHabits) ? uData.customHabits : [];
+    const habitDetails = customHabits.map((h: any) => {
+      let isDone = false;
+      if (uData?.customHabitProgress && Array.isArray(uData.customHabitProgress)) {
+        const hp = uData.customHabitProgress.find((p: any) => p.habit_id === h.id && p.date === dateStr);
+        if (hp && (hp.completed || (hp.count || 0) > 0)) {
+          isDone = true;
+        }
+      }
+      return { id: h.id, name: h.name, isDone };
+    });
+    const doneCount = habitDetails.filter((h) => h.isDone).length;
+    return { member: m, stats, habitDetails, doneCount, totalHabits: customHabits.length };
+  });
+
+  const filtered = memberHabitData
+    .filter((item) => {
+      const q = search.trim().toLowerCase();
+      const nameMatch = (item.member.displayName || "").toLowerCase().includes(q) || (item.member.email || "").toLowerCase().includes(q);
+      if (!nameMatch) return false;
+      if (filterMode === "done") return item.doneCount > 0;
+      if (filterMode === "not_done") return item.doneCount === 0;
+      return true;
+    })
+    .sort((a, b) => b.stats.habitsPct - a.stats.habitsPct || (a.member.displayName || "").localeCompare(b.member.displayName || "", "ar"));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 dir-rtl">
+      <div className="bg-white rounded-3xl border border-purple-200 shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden text-right">
+        {/* Header */}
+        <div className="p-4 bg-gradient-to-r from-purple-50 via-fuchsia-50 to-pink-50 border-b border-purple-200 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="h-9 w-9 rounded-xl bg-purple-200 text-purple-900 border border-purple-300 font-black text-sm flex items-center justify-center shadow-2xs">
+              🌸
+            </span>
+            <div>
+              <h3 className="text-sm font-black text-purple-950">نافذة متابعة الأخلاق والسنن لهذا اليوم</h3>
+              <p className="text-[11px] text-purple-800 font-bold">
+                {formatArabicDate(dateStr)} ({dateStr})
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/80 cursor-pointer transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Controls */}
+        <div className="p-3 bg-slate-50/80 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="بحث عن عضو..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-3 pr-8 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:border-purple-500 font-bold"
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setFilterMode("all")}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${
+                filterMode === "all" ? "bg-purple-700 text-white font-black" : "bg-white text-slate-700 border border-slate-200"
+              }`}
+            >
+              الكل ({memberHabitData.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilterMode("done")}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${
+                filterMode === "done" ? "bg-purple-700 text-white font-black" : "bg-white text-slate-700 border border-slate-200"
+              }`}
+            >
+              المطبقين ({memberHabitData.filter((i) => i.doneCount > 0).length})
+            </button>
+          </div>
+        </div>
+
+        {/* List */}
+        <div className="p-3 sm:p-4 overflow-y-auto space-y-2 flex-1">
+          {filtered.length === 0 ? (
+            <p className="text-center text-xs text-slate-400 py-8 font-bold">لا يوجد نتائج مطابقة</p>
+          ) : (
+            filtered.map((item, idx) => (
+              <div
+                key={item.member.uid}
+                className={`p-3 rounded-2xl border transition-all ${
+                  item.doneCount > 0
+                    ? "bg-purple-50/40 border-purple-200 hover:border-purple-400"
+                    : "bg-slate-50/60 border-slate-200"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="h-6 w-6 rounded-lg bg-purple-100 text-purple-950 font-black text-xs flex items-center justify-center shrink-0">
+                      {idx + 1}
+                    </span>
+                    <span className="font-extrabold text-xs text-slate-900 truncate">
+                      {item.member.displayName || "عضو"}
+                    </span>
+                  </div>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black border ${
+                      item.stats.habitsPct > 0
+                        ? "bg-purple-100 text-purple-950 border-purple-300"
+                        : "bg-slate-100 text-slate-500 border-slate-200"
+                    }`}
+                  >
+                    {item.doneCount} من {item.totalHabits} أخلاق ({item.stats.habitsPct}%)
+                  </span>
+                </div>
+                {item.habitDetails.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {item.habitDetails.map((h: any) => (
+                      <span
+                        key={h.id}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold border flex items-center gap-1 ${
+                          h.isDone
+                            ? "bg-purple-200/80 text-purple-950 border-purple-300 shadow-2xs"
+                            : "bg-white text-slate-400 border-slate-200"
+                        }`}
+                      >
+                        <span>{h.isDone ? "✓" : "○"}</span>
+                        <span>{h.name}</span>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-400 font-medium mt-1">لم يتم تخصيص أخلاق لهذا العضو</p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-black cursor-pointer shadow-xs"
+          >
+            إغلاق
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DateSalawatModal({
+  dateStr,
+  members,
+  userDataMap,
+  onClose,
+}: {
+  dateStr: string;
+  members: UserProfileDoc[];
+  userDataMap: Record<string, UserCloudData>;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  const memberSalawatData = members.map((m) => {
+    const uData = getUserDataForMember(m, userDataMap);
+    const stats = getMemberStatsForDate(uData, dateStr);
+    const nLog = uData?.nafahatLogs?.find((n: any) => n.date === dateStr);
+    const formulaTitle = nLog?.custom_salawat_title || "الصيغة المعتادة";
+    return { member: m, stats, salawatCount: stats.salawatCount, salawatPct: stats.salawatPct, formulaTitle };
+  });
+
+  const totalSum = memberSalawatData.reduce((acc, curr) => acc + curr.salawatCount, 0);
+
+  const filtered = memberSalawatData
+    .filter((item) => {
+      const q = search.trim().toLowerCase();
+      return (item.member.displayName || "").toLowerCase().includes(q) || (item.member.email || "").toLowerCase().includes(q);
+    })
+    .sort((a, b) => b.salawatCount - a.salawatCount || (a.member.displayName || "").localeCompare(b.member.displayName || "", "ar"));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 dir-rtl">
+      <div className="bg-white rounded-3xl border border-rose-200 shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden text-right">
+        {/* Header */}
+        <div className="p-4 bg-gradient-to-r from-rose-50 via-red-50 to-amber-50 border-b border-rose-200 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="h-9 w-9 rounded-xl bg-rose-200 text-rose-900 border border-rose-300 font-black text-sm flex items-center justify-center shadow-2xs">
+              🌺
+            </span>
+            <div>
+              <h3 className="text-sm font-black text-rose-950">نافذة متابعة الصلاة على النبي ﷺ لهذا اليوم</h3>
+              <p className="text-[11px] text-rose-800 font-bold">
+                {formatArabicDate(dateStr)} ({dateStr})
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/80 cursor-pointer transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Overview Bar */}
+        <div className="p-3 bg-rose-50/60 border-b border-rose-100 flex items-center justify-between gap-2">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="بحث عن عضو..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-3 pr-8 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:border-rose-500 font-bold"
+            />
+          </div>
+          <span className="text-xs font-black text-rose-950 bg-rose-100 border border-rose-300 px-3 py-1 rounded-xl shrink-0">
+            مجموع الصلوات اليوم: {totalSum.toLocaleString("ar-EG")} 🌸
+          </span>
+        </div>
+
+        {/* List */}
+        <div className="p-3 sm:p-4 overflow-y-auto space-y-2 flex-1">
+          {filtered.length === 0 ? (
+            <p className="text-center text-xs text-slate-400 py-8 font-bold">لا يوجد نتائج مطابقة</p>
+          ) : (
+            filtered.map((item, idx) => (
+              <div
+                key={item.member.uid}
+                className={`p-3 rounded-2xl border flex items-center justify-between gap-2.5 transition-all ${
+                  item.salawatCount > 0
+                    ? "bg-rose-50/40 border-rose-200 hover:border-rose-400"
+                    : "bg-slate-50/60 border-slate-200"
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className={`h-6.5 w-6.5 rounded-lg font-black text-xs flex items-center justify-center shrink-0 ${
+                      idx === 0 && item.salawatCount > 0
+                        ? "bg-amber-400 text-slate-950 ring-2 ring-amber-300"
+                        : "bg-rose-100 text-rose-950"
+                    }`}
+                  >
+                    {idx + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="font-extrabold text-xs text-slate-900 truncate block">
+                      {item.member.displayName || "عضو"}
+                    </span>
+                    {item.salawatCount > 0 && (
+                      <span className="text-[10px] text-rose-700 font-bold truncate block">
+                        الصيغة: {item.formulaTitle}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <span
+                    className={`px-3 py-1 rounded-xl text-xs font-black border ${
+                      item.salawatCount > 0
+                        ? "bg-rose-100 text-rose-950 border-rose-300 shadow-2xs"
+                        : "bg-slate-100 text-slate-400 border-slate-200"
+                    }`}
+                  >
+                    {item.salawatCount.toLocaleString("ar-EG")} صلاة ({item.salawatPct}%)
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-xl text-xs font-black cursor-pointer shadow-xs"
+          >
+            إغلاق
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DateSunnahHadayaModal({
+  dateStr,
+  members,
+  userDataMap,
+  onClose,
+}: {
+  dateStr: string;
+  members: UserProfileDoc[];
+  userDataMap: Record<string, UserCloudData>;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  const memberData = members.map((m) => {
+    const uData = getUserDataForMember(m, userDataMap);
+    const stats = getMemberStatsForDate(uData, dateStr);
+    const nLog = uData?.nafahatLogs?.find((n: any) => n.date === dateStr);
+    const regularIds = Array.isArray(nLog?.regular_sunnah_ids) ? nLog.regular_sunnah_ids : [];
+    const hasRevivedGift = nLog?.rare_sunnah_ratings && Object.keys(nLog.rare_sunnah_ratings).length > 0;
+    const ratings = nLog?.rare_sunnah_ratings || {};
+    return { member: m, stats, regularIds, hasRevivedGift, ratings };
+  });
+
+  const filtered = memberData
+    .filter((item) => {
+      const q = search.trim().toLowerCase();
+      return (item.member.displayName || "").toLowerCase().includes(q) || (item.member.email || "").toLowerCase().includes(q);
+    })
+    .sort((a, b) => (b.regularIds.length + (b.hasRevivedGift ? 2 : 0)) - (a.regularIds.length + (a.hasRevivedGift ? 2 : 0)) || (a.member.displayName || "").localeCompare(b.member.displayName || "", "ar"));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 dir-rtl">
+      <div className="bg-white rounded-3xl border border-teal-200 shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden text-right">
+        {/* Header */}
+        <div className="p-4 bg-gradient-to-r from-teal-50 via-emerald-50 to-green-50 border-b border-teal-200 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="h-9 w-9 rounded-xl bg-teal-200 text-teal-900 border border-teal-300 font-black text-sm flex items-center justify-center shadow-2xs">
+              🌿
+            </span>
+            <div>
+              <h3 className="text-sm font-black text-teal-950">نافذة متابعة السنن الراتبة والهدايا النبوية</h3>
+              <p className="text-[11px] text-teal-800 font-bold">
+                {formatArabicDate(dateStr)} ({dateStr})
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/80 cursor-pointer transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Controls */}
+        <div className="p-3 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between gap-2">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="بحث عن عضو..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-3 pr-8 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:border-teal-500 font-bold"
+            />
+          </div>
+        </div>
+
+        {/* List */}
+        <div className="p-3 sm:p-4 overflow-y-auto space-y-2 flex-1">
+          {filtered.length === 0 ? (
+            <p className="text-center text-xs text-slate-400 py-8 font-bold">لا يوجد نتائج مطابقة</p>
+          ) : (
+            filtered.map((item, idx) => (
+              <div
+                key={item.member.uid}
+                className={`p-3 rounded-2xl border transition-all ${
+                  item.regularIds.length > 0 || item.hasRevivedGift
+                    ? "bg-teal-50/40 border-teal-200 hover:border-teal-400"
+                    : "bg-slate-50/60 border-slate-200"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="h-6 w-6 rounded-lg bg-teal-100 text-teal-950 font-black text-xs flex items-center justify-center shrink-0">
+                      {idx + 1}
+                    </span>
+                    <span className="font-extrabold text-xs text-slate-900 truncate">
+                      {item.member.displayName || "عضو"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                        item.regularIds.length > 0
+                          ? "bg-teal-100 text-teal-950 border-teal-300"
+                          : "bg-slate-100 text-slate-400 border-slate-200"
+                      }`}
+                    >
+                      {item.regularIds.length} من 8 سنن راتبة
+                    </span>
+                    {item.hasRevivedGift && (
+                      <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-amber-100 text-amber-950 border border-amber-300">
+                        🎁 أحيا الهدية النبوية
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {item.regularIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {DEFAULT_REGULAR_SUNNAHS.map((s: RegularSunnahItem) => {
+                      const isDone = item.regularIds.includes(s.id);
+                      if (!isDone) return null;
+                      return (
+                        <span
+                          key={s.id}
+                          className="px-2 py-0.5 rounded bg-teal-200/70 text-teal-950 font-bold text-[9px] border border-teal-300"
+                        >
+                          ✓ {s.title}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-black cursor-pointer shadow-xs"
+          >
+            إغلاق
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MembersSunnahModal({
+  members,
+  userDataMap,
+  evalDates,
+  onClose,
+}: {
+  members: UserProfileDoc[];
+  userDataMap: Record<string, UserCloudData>;
+  evalDates: string[];
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  const memberStats = members.map((m) => {
+    const uData = getUserDataForMember(m, userDataMap);
+    const stats = getOverallMemberStats(uData, evalDates);
+    return { member: m, stats };
+  });
+
+  const sorted = memberStats
+    .filter((item) => {
+      const q = search.trim().toLowerCase();
+      return (item.member.displayName || "").toLowerCase().includes(q) || (item.member.email || "").toLowerCase().includes(q);
+    })
+    .sort((a, b) => b.stats.sumSunnahDone - a.stats.sumSunnahDone || b.stats.sunnahPct - a.stats.sunnahPct || (a.member.displayName || "").localeCompare(b.member.displayName || "", "ar"));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 dir-rtl">
+      <div className="bg-white rounded-3xl border border-teal-200 shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden text-right">
+        {/* Header */}
+        <div className="p-4 bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-100 border-b border-teal-200 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="h-9 w-9 rounded-xl bg-teal-200 text-teal-900 border border-teal-300 font-black text-sm flex items-center justify-center shadow-2xs">
+              🌿
+            </span>
+            <div>
+              <h3 className="text-sm font-black text-teal-950">نافذة متابعة السنن الراتبة لكافة الأعضاء</h3>
+              <p className="text-[11px] text-teal-800 font-bold">
+                إجمالي إنجاز السنن اليومية عبر الفترة ({evalDates.length} أيام)
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/80 cursor-pointer transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="p-3 bg-slate-50/80 border-b border-slate-200">
+          <div className="relative">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="بحث عن عضو..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-3 pr-8 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:border-teal-500 font-bold"
+            />
+          </div>
+        </div>
+
+        {/* List */}
+        <div className="p-3 sm:p-4 overflow-y-auto space-y-2 flex-1">
+          {sorted.length === 0 ? (
+            <p className="text-center text-xs text-slate-400 py-8 font-bold">لا يوجد أعضاء مطابقين</p>
+          ) : (
+            sorted.map((item, idx) => (
+              <div
+                key={item.member.uid}
+                className="p-3 bg-teal-50/30 hover:bg-teal-50/60 rounded-2xl border border-teal-200/80 flex items-center justify-between gap-3 shadow-2xs transition-all"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className={`h-7 w-7 rounded-xl font-black text-xs flex items-center justify-center shrink-0 ${
+                      idx === 0
+                        ? "bg-amber-400 text-slate-950 ring-2 ring-amber-300"
+                        : "bg-teal-100 text-teal-950 border border-teal-200"
+                    }`}
+                  >
+                    {idx + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="font-extrabold text-xs text-slate-900 truncate block">
+                      {item.member.displayName || "عضو"}
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-medium truncate block">
+                      {item.member.email}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="px-3 py-1 rounded-xl text-xs font-black bg-teal-100 text-teal-950 border border-teal-300 shadow-2xs">
+                    {item.stats.sumSunnahDone} سنّة منجزة ({item.stats.sunnahPct}%)
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-black cursor-pointer shadow-xs"
+          >
+            إغلاق
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MembersHadayaModal({
+  members,
+  userDataMap,
+  evalDates,
+  onClose,
+}: {
+  members: UserProfileDoc[];
+  userDataMap: Record<string, UserCloudData>;
+  evalDates: string[];
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  const memberStats = members.map((m) => {
+    const uData = getUserDataForMember(m, userDataMap);
+    const stats = getOverallMemberStats(uData, evalDates);
+    return { member: m, stats };
+  });
+
+  const sorted = memberStats
+    .filter((item) => {
+      const q = search.trim().toLowerCase();
+      return (item.member.displayName || "").toLowerCase().includes(q) || (item.member.email || "").toLowerCase().includes(q);
+    })
+    .sort((a, b) => b.stats.sumHadayaRevived - a.stats.sumHadayaRevived || (a.member.displayName || "").localeCompare(b.member.displayName || "", "ar"));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 dir-rtl">
+      <div className="bg-white rounded-3xl border border-amber-200 shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden text-right">
+        {/* Header */}
+        <div className="p-4 bg-gradient-to-r from-amber-50 via-yellow-50 to-orange-50 border-b border-amber-200 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="h-9 w-9 rounded-xl bg-amber-200 text-amber-900 border border-amber-300 font-black text-sm flex items-center justify-center shadow-2xs">
+              🎁
+            </span>
+            <div>
+              <h3 className="text-sm font-black text-amber-950">نافذة متابعة الهدايا النبوية لكافة الأعضاء</h3>
+              <p className="text-[11px] text-amber-800 font-bold">
+                إجمالي الهدايا والسنن النادرة المحياة عبر الفترة ({evalDates.length} أيام)
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/80 cursor-pointer transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="p-3 bg-slate-50/80 border-b border-slate-200">
+          <div className="relative">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="بحث عن عضو..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-3 pr-8 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:border-amber-500 font-bold"
+            />
+          </div>
+        </div>
+
+        {/* List */}
+        <div className="p-3 sm:p-4 overflow-y-auto space-y-2 flex-1">
+          {sorted.length === 0 ? (
+            <p className="text-center text-xs text-slate-400 py-8 font-bold">لا يوجد أعضاء مطابقين</p>
+          ) : (
+            sorted.map((item, idx) => (
+              <div
+                key={item.member.uid}
+                className="p-3 bg-amber-50/30 hover:bg-amber-50/60 rounded-2xl border border-amber-200/80 flex items-center justify-between gap-3 shadow-2xs transition-all"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className={`h-7 w-7 rounded-xl font-black text-xs flex items-center justify-center shrink-0 ${
+                      idx === 0
+                        ? "bg-amber-400 text-slate-950 ring-2 ring-amber-300"
+                        : "bg-amber-100 text-amber-950 border border-amber-200"
+                    }`}
+                  >
+                    {idx + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="font-extrabold text-xs text-slate-900 truncate block">
+                      {item.member.displayName || "عضو"}
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-medium truncate block">
+                      {item.member.email}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="px-3 py-1 rounded-xl text-xs font-black bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs">
+                    🎁 {item.stats.sumHadayaRevived} هدية نبوية محياة
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-xs font-black cursor-pointer shadow-xs"
+          >
+            إغلاق
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminPage() {
   const { currentUser, toggleAdminRole } = useAuth();
   const navigate = useNavigate();
@@ -1631,6 +2376,15 @@ function AdminPage() {
   const [selectedLeaderboardMember, setSelectedLeaderboardMember] = useState<UserProfileDoc | null>(null);
   const [showAllUserHabitsModal, setShowAllUserHabitsModal] = useState<boolean>(false);
 
+  // Modals for byDate extra views:
+  const [dateHabitsModalDate, setDateHabitsModalDate] = useState<string | null>(null);
+  const [dateSalawatModalDate, setDateSalawatModalDate] = useState<string | null>(null);
+  const [dateSunnahHadayaModalDate, setDateSunnahHadayaModalDate] = useState<string | null>(null);
+
+  // Modals for byMember separate Sunnah & Hadaya windows:
+  const [showMembersSunnahModal, setShowMembersSunnahModal] = useState<boolean>(false);
+  const [showMembersHadayaModal, setShowMembersHadayaModal] = useState<boolean>(false);
+
   // Admin Direct Password Reset State
   const [adminResetUser, setAdminResetUser] = useState<UserProfileDoc | null>(null);
   const [adminNewPassword, setAdminNewPassword] = useState<string>("123456");
@@ -1682,103 +2436,106 @@ function AdminPage() {
   useEffect(() => {
     if (!currentUser?.isAdmin) return;
 
+    if (isQuotaExceeded()) {
+      setLoadingMembers(false);
+      return;
+    }
+
     setLoadingMembers(true);
 
     // 1. Real-time listener for users collection
-    const unsubUsers = onSnapshot(collection(dbFirestore, "users"), (snap) => {
-      const list: UserProfileDoc[] = [];
-      snap.forEach((d) => {
-        const data = d.data();
-        list.push({
-          uid: d.id,
-          displayName: data.displayName || "عضو بدون اسم",
-          email: data.email || "",
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt,
-          isAdmin: data.isAdmin,
-        });
-      });
-      setMembers(list);
-      setLoadingMembers(false);
+    let unsubUsers = () => {};
+    let unsubUserData = () => {};
+    let unsubGlobalHabits = () => {};
+    let unsubGlobalAthkar = () => {};
 
-      // Members list loaded; user_data listener handles live progress updates automatically
-      setUserDataMap((prevMap) => {
-        const missing = list.filter((m) => !prevMap[m.uid]);
-        if (missing.length > 0) {
-          missing.forEach((m) => {
-            loadSingleMemberCloudData(m).then((data) => {
-              if (data) {
-                setUserDataMap((p) => ({ ...p, [m.uid]: data }));
-              }
-            });
+    try {
+      unsubUsers = onSnapshot(collection(dbFirestore, "users"), (snap) => {
+        const list: UserProfileDoc[] = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          list.push({
+            uid: d.id,
+            displayName: data.displayName || "عضو بدون اسم",
+            email: data.email || "",
+            createdAt: data.createdAt,
+            updatedAt: data.updatedAt,
+            isAdmin: data.isAdmin,
           });
-        }
-        return prevMap;
-      });
-    }, (err) => {
-      const errStr = String(err?.message || err || "");
-      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
-        setQuotaExceededCooldown(12);
-      } else {
-        console.error("Error subscribing to users collection:", err);
-      }
-      setLoadingMembers(false);
-    });
-
-    // 2. Real-time listener for user_data collection
-    const unsubUserData = onSnapshot(collection(dbFirestore, "user_data"), (snap) => {
-      const liveDataMap: Record<string, UserCloudData> = {};
-      snap.forEach((d) => {
-        liveDataMap[d.id] = d.data() as UserCloudData;
-      });
-
-      setUserDataMap((prev) => {
-        const updated = { ...prev };
-        Object.entries(liveDataMap).forEach(([id, data]) => {
-          updated[id] = data;
         });
-        return updated;
+        setMembers(list);
+        setLoadingMembers(false);
+      }, (err) => {
+        const errStr = String(err?.message || err || "");
+        if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+          setQuotaExceededCooldown(24);
+          unsubUsers();
+        } else {
+          console.error("Error subscribing to users collection:", err);
+        }
+        setLoadingMembers(false);
       });
-    }, (err) => {
-      const errStr = String(err?.message || err || "");
-      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
-        setQuotaExceededCooldown(12);
-      } else {
-        console.error("Error subscribing to user_data collection:", err);
-      }
-    });
 
-    // 3. Real-time listener for global_habits collection
-    const unsubGlobalHabits = onSnapshot(collection(dbFirestore, "global_habits"), (snap) => {
-      const list: any[] = [];
-      snap.forEach((d) => {
-        list.push({ id: d.id, ...d.data() });
-      });
-      setGlobalHabits(list);
-    }, (err) => {
-      const errStr = String(err?.message || err || "");
-      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
-        setQuotaExceededCooldown(12);
-      } else {
-        console.error("Error subscribing to global_habits collection:", err);
-      }
-    });
+      // 2. Real-time listener for user_data collection
+      unsubUserData = onSnapshot(collection(dbFirestore, "user_data"), (snap) => {
+        const liveDataMap: Record<string, UserCloudData> = {};
+        snap.forEach((d) => {
+          liveDataMap[d.id] = d.data() as UserCloudData;
+        });
 
-    // 4. Real-time listener for global_athkar collection
-    const unsubGlobalAthkar = onSnapshot(collection(dbFirestore, "global_athkar"), (snap) => {
-      const list: any[] = [];
-      snap.forEach((d) => {
-        list.push({ id: d.id, ...d.data() });
+        setUserDataMap((prev) => {
+          const updated = { ...prev };
+          Object.entries(liveDataMap).forEach(([id, data]) => {
+            updated[id] = data;
+          });
+          return updated;
+        });
+      }, (err) => {
+        const errStr = String(err?.message || err || "");
+        if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+          setQuotaExceededCooldown(24);
+          unsubUserData();
+        } else {
+          console.error("Error subscribing to user_data collection:", err);
+        }
       });
-      setGlobalAthkar(list);
-    }, (err) => {
-      const errStr = String(err?.message || err || "");
-      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
-        setQuotaExceededCooldown(12);
-      } else {
-        console.error("Error subscribing to global_athkar collection:", err);
-      }
-    });
+
+      // 3. Real-time listener for global_habits collection
+      unsubGlobalHabits = onSnapshot(collection(dbFirestore, "global_habits"), (snap) => {
+        const list: any[] = [];
+        snap.forEach((d) => {
+          list.push({ id: d.id, ...d.data() });
+        });
+        setGlobalHabits(list);
+      }, (err) => {
+        const errStr = String(err?.message || err || "");
+        if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+          setQuotaExceededCooldown(24);
+          unsubGlobalHabits();
+        } else {
+          console.error("Error subscribing to global_habits collection:", err);
+        }
+      });
+
+      // 4. Real-time listener for global_athkar collection
+      unsubGlobalAthkar = onSnapshot(collection(dbFirestore, "global_athkar"), (snap) => {
+        const list: any[] = [];
+        snap.forEach((d) => {
+          list.push({ id: d.id, ...d.data() });
+        });
+        setGlobalAthkar(list);
+      }, (err) => {
+        const errStr = String(err?.message || err || "");
+        if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+          setQuotaExceededCooldown(24);
+          unsubGlobalAthkar();
+        } else {
+          console.error("Error subscribing to global_athkar collection:", err);
+        }
+      });
+    } catch (e) {
+      setLoadingMembers(false);
+    }
 
     // 5. Real-time listener for global_hadaya collection
     const unsubGlobalHadaya = subscribeGlobalHadaya((items) => {
@@ -2652,6 +3409,16 @@ function AdminPage() {
           </button>
         </div>
       </header>
+
+      {/* Quota Exceeded Friendly Banner */}
+      {isQuotaExceeded() && (
+        <div className="mb-4 p-3 rounded-2xl bg-amber-50/95 border border-amber-300 text-amber-950 text-xs flex items-center gap-2.5 font-medium shadow-2xs">
+          <span className="text-base shrink-0">ℹ️</span>
+          <p className="leading-relaxed">
+            تم الوصول للحد اليومي المؤقت للمزامنة السحابية المجانية (Firestore Daily Quota). جميع بيانات الأعضاء والصلوات والأوراد محفوظة محلياً وتعمل بشكل طبيعي، وستُستأنف المزامنة السحابية تلقائياً عند تجدد الحصة اليومية.
+          </p>
+        </div>
+      )}
 
       {/* 1, 2, 3 & 4. Add Global Habit, Add Global Thikr, Add Global Hadaya, and Salawat Formulas Manager in a 4-Column Responsive Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
@@ -3690,16 +4457,22 @@ function AdminPage() {
                       {/* Soft Pastel Light Header Bar */}
                       <div
                         onClick={() => setCollapsedDays((prev) => ({ ...prev, [dateStr]: !prev[dateStr] }))}
-                        className="flex items-center justify-between p-3.5 bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-100/60 text-slate-900 cursor-pointer hover:bg-teal-100/80 transition-all select-none border-b border-teal-200/80"
+                        className="flex flex-wrap items-center justify-between gap-2 p-3 bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-100/60 text-slate-900 cursor-pointer hover:bg-teal-100/80 transition-all select-none border-b border-teal-200/80"
                       >
-                        <div className="flex items-center gap-2">
-                          <Calendar className="h-4.5 w-4.5 text-teal-700" />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Calendar className="h-4.5 w-4.5 text-teal-700 shrink-0" />
                           <h3 className="text-xs font-black text-slate-900">{formatArabicDate(dateStr)} ({dateStr})</h3>
                           <span className="bg-emerald-200/70 text-emerald-950 border border-emerald-300 text-[10px] font-black px-2.5 py-0.5 rounded-md shadow-2xs">
                             تمت التعبئة بواسطة {submittedMembers.length} من {sortedMembers.length} أعضاء
                           </span>
                         </div>
-                        {isDayCollapsed ? <ChevronDown className="h-4 w-4 text-teal-800" /> : <ChevronUp className="h-4 w-4 text-teal-800" />}
+
+                        {/* Collapse Button */}
+                        <div className="flex items-center gap-1.5">
+                          <span className="p-1 text-teal-800">
+                            {isDayCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+                          </span>
+                        </div>
                       </div>
 
                       {/* Day Content: Member Rows */}
@@ -3720,12 +4493,21 @@ function AdminPage() {
 
                               return (
                                 <div key={m.uid} className="flex flex-col">
-                                  {/* Single Line Person Row */}
-                                  <div className={`flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl border transition-all ${
-                                    isSubmitted
-                                      ? "border-emerald-300/80 hover:border-amber-400 bg-emerald-50/30 shadow-2xs"
-                                      : "border-slate-200 hover:border-slate-300 bg-slate-50/40 opacity-80 hover:opacity-100"
-                                  }`}>
+                                  {/* Single Line Person Row - Clickable to show full details */}
+                                  <div
+                                    onClick={() => {
+                                      setExpandedMemberKey(isExpanded ? null : key);
+                                      setSelectedUser(m);
+                                      fetchUserData(m);
+                                    }}
+                                    className={`flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl border transition-all cursor-pointer select-none ${
+                                      isExpanded
+                                        ? "border-amber-400 bg-amber-50/80 ring-2 ring-amber-200 shadow-xs"
+                                        : isSubmitted
+                                        ? "border-emerald-300/80 hover:border-amber-400 bg-emerald-50/30 hover:bg-emerald-50/60 shadow-2xs"
+                                        : "border-slate-200 hover:border-slate-300 bg-slate-50/40 opacity-80 hover:opacity-100"
+                                    }`}
+                                  >
                                     <div className="flex items-center gap-2">
                                       <span className={`font-black text-xs h-6 w-6 rounded-lg flex items-center justify-center shrink-0 text-[11px] border ${
                                         isSubmitted
@@ -3787,6 +4569,22 @@ function AdminPage() {
                                         🌸 الأخلاق {stats.habitsPct}%
                                       </span>
 
+                                      <span className={`px-2 py-1 rounded-lg border transition-all ${
+                                        stats.salawatPct > 0 || stats.salawatCount > 0
+                                          ? "bg-rose-100 text-rose-950 border-rose-300 font-black shadow-2xs"
+                                          : "bg-slate-100 text-slate-400 border-slate-200/80 font-medium"
+                                      }`}>
+                                        🌺 الصلاة على النبي {stats.salawatPct}%
+                                      </span>
+
+                                      <span className={`px-2 py-1 rounded-lg border transition-all ${
+                                        stats.sunnahPct > 0 || stats.sunnahDoneCount > 0 || stats.hadayaRevivedCount > 0
+                                          ? "bg-teal-100 text-teal-950 border-teal-300 font-black shadow-2xs"
+                                          : "bg-slate-100 text-slate-400 border-slate-200/80 font-medium"
+                                      }`}>
+                                        🌿 السنن والهدايا {stats.sunnahPct}%
+                                      </span>
+
                                       {/* Eye Icon Button */}
                                       <button
                                         type="button"
@@ -3808,9 +4606,9 @@ function AdminPage() {
                                     </div>
                                   </div>
 
-                                  {/* Collapsible Details list directly beneath this member */}
+                                  {/* Collapsible Details list directly beneath this member (Single Date Scope) */}
                                   {isExpanded && (
-                                    <MemberDetailView member={m} uData={uData} />
+                                    <MemberDetailView member={m} uData={uData} singleDate={dateStr} />
                                   )}
                                 </div>
                               );
@@ -4321,6 +5119,56 @@ function AdminPage() {
         userDataMap={userDataMap}
         globalHabits={globalHabits}
       />
+
+      {/* Date Habits Modal */}
+      {dateHabitsModalDate && (
+        <DateHabitsModal
+          dateStr={dateHabitsModalDate}
+          members={members}
+          userDataMap={userDataMap}
+          onClose={() => setDateHabitsModalDate(null)}
+        />
+      )}
+
+      {/* Date Salawat Modal */}
+      {dateSalawatModalDate && (
+        <DateSalawatModal
+          dateStr={dateSalawatModalDate}
+          members={members}
+          userDataMap={userDataMap}
+          onClose={() => setDateSalawatModalDate(null)}
+        />
+      )}
+
+      {/* Date Sunnah & Hadaya Modal */}
+      {dateSunnahHadayaModalDate && (
+        <DateSunnahHadayaModal
+          dateStr={dateSunnahHadayaModalDate}
+          members={members}
+          userDataMap={userDataMap}
+          onClose={() => setDateSunnahHadayaModalDate(null)}
+        />
+      )}
+
+      {/* Members Sunnah Modal */}
+      {showMembersSunnahModal && (
+        <MembersSunnahModal
+          members={members}
+          userDataMap={userDataMap}
+          evalDates={getUniqueSubmissionDates(members, userDataMap, true, filterStartDate, filterEndDate)}
+          onClose={() => setShowMembersSunnahModal(false)}
+        />
+      )}
+
+      {/* Members Hadaya Modal */}
+      {showMembersHadayaModal && (
+        <MembersHadayaModal
+          members={members}
+          userDataMap={userDataMap}
+          evalDates={getUniqueSubmissionDates(members, userDataMap, true, filterStartDate, filterEndDate)}
+          onClose={() => setShowMembersHadayaModal(false)}
+        />
+      )}
 
       {/* Global Hadaya / Sunnahs Manager Modal */}
       <HadayaManagerModal

@@ -1,6 +1,6 @@
 import { db, type ThikrGroup, type ThikrItem, type ThikrProgress } from "./db";
 import { isoDate, startOfWeek, endOfWeek, weekDays } from "./date-utils";
-import { autoCloudSync } from "./cloud-sync";
+import { autoCloudSync, isQuotaExceeded, setQuotaExceededCooldown } from "./cloud-sync";
 import { collection, getDocs, setDoc, doc } from "firebase/firestore";
 import { dbFirestore } from "./firebase";
 
@@ -92,8 +92,15 @@ export async function deleteGlobalThikr(docId: string, name?: string): Promise<v
 }
 
 export async function syncGlobalAthkarFromCloud(): Promise<void> {
+  if (isQuotaExceeded()) return;
   try {
-    const querySnapshot = await getDocs(collection(dbFirestore, "global_athkar")).catch(() => null);
+    const querySnapshot = await getDocs(collection(dbFirestore, "global_athkar")).catch((err: any) => {
+      const errStr = String(err?.message || err || "");
+      if (errStr.includes("resource-exhausted") || errStr.includes("quota")) {
+        setQuotaExceededCooldown(24);
+      }
+      return null;
+    });
     if (!querySnapshot) return;
 
     const localItems = await db.thikr_items.toArray();
