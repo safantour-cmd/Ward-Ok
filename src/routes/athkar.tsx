@@ -168,19 +168,20 @@ function AthkarScreen() {
   const monthFills = useMemo(() => {
     const out: Record<string, number> = {};
     if (items.length === 0) return out;
-    const activeIds = new Set(items.map((it) => it.id));
 
     for (const c of monthCells) {
       if (!c.iso) continue;
-      const dayProgress = monthProgressRows.filter(
-        (r) => r.date === c.iso && activeIds.has(r.thikr_item_id)
-      );
+      const dayProgress = monthProgressRows.filter((r) => r.date === c.iso);
+      if (dayProgress.length === 0) {
+        out[c.iso] = 0;
+        continue;
+      }
       const completedCount = dayProgress.filter((r) => {
         if (r.completed) return true;
         const it = items.find((item) => item.id === r.thikr_item_id);
-        return it && (r.current_count || 0) >= it.target_count;
+        return it ? (r.current_count || 0) >= it.target_count : (r.current_count || 0) > 0;
       }).length;
-      out[c.iso] = completedCount / items.length;
+      out[c.iso] = Math.min(1, completedCount / items.length);
     }
     return out;
   }, [items, monthCells, monthProgressRows]);
