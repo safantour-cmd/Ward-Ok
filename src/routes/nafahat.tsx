@@ -52,6 +52,7 @@ import {
   getFormulaSalawatDailyGoal,
   setFormulaSalawatDailyGoal,
   getTotalSalawatInMonth,
+  getTotalSalawatSeason,
   getHijriDate,
   subscribeGlobalHadaya,
   getHadayaForDay,
@@ -132,13 +133,12 @@ function NafahatScreen() {
     [selectedDate]
   );
 
-  // All logs for cumulative month count
-  const currentMonthPrefix = selectedDate.substring(0, 7);
+  // All logs for cumulative season count (ربيع الأول + ربيع الثاني معاً)
   const [formulaSyncTrigger, setFormulaSyncTrigger] = useState(0);
 
   const monthTotalSalawat = useLiveQuery(
-    () => getTotalSalawatInMonth(currentMonthPrefix),
-    [currentMonthPrefix, formulaSyncTrigger]
+    () => getTotalSalawatSeason(),
+    [formulaSyncTrigger]
   ) ?? 0;
 
   // Listen for custom formula update events & hijri offset changes
@@ -1499,7 +1499,7 @@ function NafahatScreen() {
           <div className="bg-white rounded-3xl max-w-xs w-full p-5 shadow-2xl relative animate-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs font-black text-slate-900">
-                تحديد الهدف الشهري التراكمي
+                تحديد الهدف الشامل لربيعين (٦٠ يوماً)
               </h3>
               <button
                 onClick={() => setShowEditGoalModal(false)}
@@ -1510,7 +1510,7 @@ function NafahatScreen() {
             </div>
 
             <p className="text-[11px] text-slate-500 mb-3">
-              حدد عدد الصلوات المستهدف إنجازها خلال شهر ربيع الأول كاملاً:
+              حدد عدد الصلوات المستهدف إنجازها خلال موسمي ربيع الأول وربيع الثاني معاً (٦٠ يوماً):
             </p>
 
             <input
