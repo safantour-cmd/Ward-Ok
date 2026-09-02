@@ -133,10 +133,10 @@ function AthkarScreen() {
     localStorage.setItem("athkar_calendar_view_type", type);
   };
 
-  // Monthly calendar calculations
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
+  // Monthly calendar calculations based on selectedDate
+  const calendarDate = useMemo(() => parseIsoDateString(selectedDate), [selectedDate]);
+  const year = calendarDate.getFullYear();
+  const month = calendarDate.getMonth();
   const firstOfMonth = new Date(year, month, 1);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const jsDay = firstOfMonth.getDay(); 
@@ -184,6 +184,17 @@ function AthkarScreen() {
     }
     return out;
   }, [items, monthCells, monthProgressRows]);
+
+  // Overall monthly commitment percentage for the viewed month
+  const monthCommitmentPct = useMemo(() => {
+    const validCells = monthCells.filter((c) => c.iso && c.iso <= today);
+    if (validCells.length === 0) {
+      // If browsing a future month, or empty, return 0
+      return 0;
+    }
+    const sum = validCells.reduce((acc, c) => acc + (monthFills[c.iso!] || 0), 0);
+    return Math.round((sum / validCells.length) * 100);
+  }, [monthCells, monthFills, today]);
 
   useEffect(() => {
     pickWisdomForWeek().then(setWisdom);
@@ -234,10 +245,10 @@ function AthkarScreen() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
               <div className="text-xs text-muted-foreground font-bold">
-                {athkarViewType === "week" ? "التزامك الأسبوعي بالأذكار" : `ورد الأذكار لشهر: ${arabicMonthYear(now)}`}
+                {`ورد الأذكار لشهر: ${arabicMonthYear(calendarDate)}`}
               </div>
               <div className="text-3xl font-black tabular-nums text-[color:var(--athkar)] mt-0.5">
-                {stats.commitment_percent}%
+                {monthCommitmentPct}%
               </div>
             </div>
 
