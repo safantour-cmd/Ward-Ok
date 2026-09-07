@@ -98,18 +98,21 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
     const deletedItems = getDeletedThikrItems();
     const deletedGroups = getDeletedThikrGroups();
 
-    const cleanThikrItems = thikrItems.filter((i) => {
-      const k1 = String(i.id);
-      const k2 = i.global_id ? String(i.global_id).toLowerCase() : "";
-      const k3 = i.name ? i.name.trim().toLowerCase() : "";
-      return !deletedItems.has(k1) && !deletedItems.has(k2) && !deletedItems.has(k3);
-    });
-
     const cleanThikrGroups = thikrGroups.filter((g) => {
       const k1 = String(g.id);
       const k2 = g.global_id ? String(g.global_id).toLowerCase() : "";
       const k3 = g.name ? g.name.trim().toLowerCase() : "";
       return !deletedGroups.has(k1) && !deletedGroups.has(k2) && !deletedGroups.has(k3);
+    });
+    const activeGroupIds = new Set(cleanThikrGroups.map((g) => g.id));
+
+    const cleanThikrItems = thikrItems.filter((i) => {
+      const k1 = String(i.id);
+      const k2 = i.global_id ? String(i.global_id).toLowerCase() : "";
+      const k3 = i.name ? i.name.trim().toLowerCase() : "";
+      if (deletedItems.has(k1) || deletedItems.has(k2) || deletedItems.has(k3)) return false;
+      if (i.group_id != null && !activeGroupIds.has(i.group_id)) return false;
+      return true;
     });
 
     // Generate lightweight content signature to avoid writing if local data has not changed
@@ -534,13 +537,6 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
     const mergedQuranDailyReading = mergeQuranDailyReadingList(localQuranDailyReading, Array.isArray(parsed.quranDailyReading) ? parsed.quranDailyReading : []);
     const mergedQuranSurahState = mergeQuranSurahStateList(localQuranSurahState, Array.isArray(parsed.quranSurahState) ? parsed.quranSurahState : []);
     const deletedThikr = getDeletedThikrItems();
-    const isThikrDeleted = (it: ThikrItem) => {
-      const k1 = String(it.id);
-      const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
-      const k3 = it.name ? it.name.trim().toLowerCase() : "";
-      return deletedThikr.has(k1) || deletedThikr.has(k2) || deletedThikr.has(k3);
-    };
-
     const deletedGrp = getDeletedThikrGroups();
     const isGroupDeleted = (g: ThikrGroup) => {
       const k1 = String(g.id);
@@ -549,8 +545,19 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
       return deletedGrp.has(k1) || deletedGrp.has(k2) || deletedGrp.has(k3);
     };
 
-    const mergedThikrItems = mergeGenericItems<ThikrItem>(localThikrItems, Array.isArray(parsed.thikrItems) ? parsed.thikrItems : [], isThikrDeleted);
     const mergedThikrGroups = mergeGenericItems<ThikrGroup>(localThikrGroups, Array.isArray(parsed.thikrGroups) ? parsed.thikrGroups : [], isGroupDeleted);
+    const activeGroupIds = new Set(mergedThikrGroups.map((g) => g.id));
+
+    const isThikrDeleted = (it: ThikrItem) => {
+      const k1 = String(it.id);
+      const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
+      const k3 = it.name ? it.name.trim().toLowerCase() : "";
+      if (deletedThikr.has(k1) || deletedThikr.has(k2) || deletedThikr.has(k3)) return true;
+      if (it.group_id != null && !activeGroupIds.has(it.group_id)) return true;
+      return false;
+    };
+
+    const mergedThikrItems = mergeGenericItems<ThikrItem>(localThikrItems, Array.isArray(parsed.thikrItems) ? parsed.thikrItems : [], isThikrDeleted);
     const mergedCustomHabits = mergeGenericItems<CustomHabit>(localCustomHabits, Array.isArray(parsed.customHabits) ? parsed.customHabits : []);
     const mergedDailyQuranSelection = mergeDailyQuranSelectionList(localDailyQuranSelection, Array.isArray(parsed.dailyQuranSelection) ? parsed.dailyQuranSelection : []);
 

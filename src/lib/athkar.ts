@@ -218,15 +218,70 @@ export async function deleteGroup(id: number) {
     if (grp.name) recordDeletedThikrGroup(grp.name);
     recordDeletedThikrGroup(grp.id!);
   }
-  await db.transaction("rw", db.thikr_groups, db.thikr_items, async () => {
-    // detach items — do not delete them
+  await db.transaction("rw", db.thikr_groups, db.thikr_items, db.thikr_progress, async () => {
+    // Delete all items belonging to this group and mark them deleted so they don't remain as uncompleted ghosts
     const items = await db.thikr_items.where("group_id").equals(id).toArray();
     for (const it of items) {
-      if (it.id != null) await db.thikr_items.update(it.id, { group_id: null });
+      if (it.global_id) recordDeletedThikrItem(it.global_id);
+      if (it.name) recordDeletedThikrItem(it.name);
+      if (it.id != null) {
+        recordDeletedThikrItem(it.id);
+        await db.thikr_progress.where("thikr_item_id").equals(it.id).delete();
+        await db.thikr_items.delete(it.id);
+      }
     }
     await db.thikr_groups.delete(id);
   });
   autoCloudSync();
+}
+
+/** Clean up any orphaned items whose group was deleted or that were marked deleted */
+export async function cleanupOrphanedThikrs(): Promise<void> {
+  try {
+    const deletedItems = getDeletedThikrItems();
+    const deletedGroups = getDeletedThikrGroups();
+    const rawGroups = await db.thikr_groups.toArray();
+    const activeGroupIds = new Set(
+      rawGroups
+        .filter((g) => {
+          const k1 = String(g.id);
+          const k2 = g.global_id ? String(g.global_id).toLowerCase() : "";
+          const k3 = g.name ? g.name.trim().toLowerCase() : "";
+          return !deletedGroups.has(k1) && !deletedGroups.has(k2) && !deletedGroups.has(k3);
+        })
+        .map((g) => g.id)
+    );
+
+    const rawItems = await db.thikr_items.toArray();
+    const toDeleteIds: number[] = [];
+
+    for (const it of rawItems) {
+      const k1 = String(it.id);
+      const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
+      const k3 = it.name ? it.name.trim().toLowerCase() : "";
+      const isMarkedDeleted = deletedItems.has(k1) || deletedItems.has(k2) || deletedItems.has(k3);
+      const isOrphanedGroup = it.group_id != null && !activeGroupIds.has(it.group_id);
+
+      if (isMarkedDeleted || isOrphanedGroup) {
+        if (it.id != null) toDeleteIds.push(it.id);
+        if (it.global_id) recordDeletedThikrItem(it.global_id);
+        if (it.name) recordDeletedThikrItem(it.name);
+        if (it.id != null) recordDeletedThikrItem(it.id);
+      }
+    }
+
+    if (toDeleteIds.length > 0) {
+      await db.transaction("rw", db.thikr_items, db.thikr_progress, async () => {
+        for (const id of toDeleteIds) {
+          await db.thikr_progress.where("thikr_item_id").equals(id).delete();
+          await db.thikr_items.delete(id);
+        }
+      });
+      autoCloudSync();
+    }
+  } catch (err) {
+    console.warn("cleanupOrphanedThikrs error:", err);
+  }
 }
 
 /** ---------- Items ---------- */
@@ -403,49 +458,104 @@ export interface WeeklyStats {
   commitment_percent: number; // 0..100 — average per-day completion ratio
 }
 
+/** Evaluates exact athkar completion for any target date */
+export async function getAthkarStatsForDate(targetDate: string): Promise<{
+  ratio: number;
+  pct: number;
+  completedCount: number;
+  totalCount: number;
+}> {
+  const deletedItems = getDeletedThikrItems();
+  const deletedGroups = getDeletedThikrGroups();
+
+  const rawGroups = await db.thikr_groups.toArray();
+  const activeGroups = rawGroups.filter((g) => {
+    const k1 = String(g.id);
+    const k2 = g.global_id ? String(g.global_id).toLowerCase() : "";
+    const k3 = g.name ? g.name.trim().toLowerCase() : "";
+    return !deletedGroups.has(k1) && !deletedGroups.has(k2) && !deletedGroups.has(k3);
+  });
+  const activeGroupIds = new Set(activeGroups.map((g) => g.id));
+
+  const rawItems = await db.thikr_items.toArray();
+  const validItems = rawItems.filter((it) => {
+    const k1 = String(it.id);
+    const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
+    const k3 = it.name ? it.name.trim().toLowerCase() : "";
+    if (deletedItems.has(k1) || deletedItems.has(k2) || deletedItems.has(k3)) return false;
+    if (it.group_id != null && !activeGroupIds.has(it.group_id)) return false;
+    return true;
+  });
+
+  if (validItems.length === 0) {
+    return { ratio: 1, pct: 100, completedCount: 0, totalCount: 0 };
+  }
+
+  const dayRows = await db.thikr_progress.where("date").equals(targetDate).toArray();
+
+  const activeItems = validItems.filter((it) => {
+    if (it.created_at && it.created_at.slice(0, 10) > targetDate) {
+      const hasProg = dayRows.some((p) => p.thikr_item_id === it.id && (p.current_count > 0 || p.completed));
+      if (!hasProg) return false;
+    }
+    const r = dayRows.find((p) => p.thikr_item_id === it.id);
+    return !r?.excluded;
+  });
+
+  if (activeItems.length === 0) {
+    const hasAny = dayRows.some((r) => !r.excluded && (r.completed || (r.current_count || 0) > 0));
+    return { ratio: hasAny ? 1 : 0, pct: hasAny ? 100 : 0, completedCount: 0, totalCount: 0 };
+  }
+
+  let completedCount = 0;
+  let sumRatio = 0;
+
+  for (const it of activeItems) {
+    const r = dayRows.find((p) => p.thikr_item_id === it.id);
+    const target = r?.daily_target ?? it.target_count ?? 1;
+    const count = r?.current_count ?? 0;
+    const isCompleted = Boolean(r?.completed) || count >= target;
+
+    if (isCompleted) {
+      completedCount++;
+      sumRatio += 1;
+    } else {
+      sumRatio += Math.min(1, count / target);
+    }
+  }
+
+  const isAllComplete = completedCount === activeItems.length;
+  const ratio = isAllComplete ? 1 : Math.min(1, sumRatio / activeItems.length);
+  const pct = isAllComplete ? 100 : Math.min(100, Math.round(ratio * 100));
+
+  return {
+    ratio,
+    pct,
+    completedCount,
+    totalCount: activeItems.length,
+  };
+}
+
 export async function computeWeeklyStats(): Promise<WeeklyStats> {
   const days = weekDays();
   const today = isoDate();
   const elapsed = days.filter((d) => d <= today);
-  const rawItems = await db.thikr_items.toArray();
-  const deleted = getDeletedThikrItems();
-  const items = rawItems.filter((it) => {
-    const k1 = String(it.id);
-    const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
-    const k3 = it.name ? it.name.trim().toLowerCase() : "";
-    return !deleted.has(k1) && !deleted.has(k2) && !deleted.has(k3);
-  });
-
-  if (items.length === 0 || elapsed.length === 0) {
+  if (elapsed.length === 0) {
     return {
       week_start: isoDate(startOfWeek()),
       week_end: isoDate(endOfWeek()),
-      days_total: elapsed.length,
+      days_total: 0,
       commitment_percent: 0,
     };
   }
-  const rows = await db.thikr_progress.where("date").anyOf(elapsed).toArray();
+
   let sum = 0;
   for (const d of elapsed) {
-    const dayRows = rows.filter((r) => r.date === d);
-    const dayActiveItems = items.filter((it) => {
-      const r = dayRows.find((p) => p.thikr_item_id === it.id);
-      return !r?.excluded;
-    });
-    if (dayActiveItems.length === 0) {
-      sum += 1;
-      continue;
-    }
-    const completedCount = dayActiveItems.filter((it) => {
-      const r = dayRows.find((p) => p.thikr_item_id === it.id);
-      if (!r) return false;
-      if (r.completed) return true;
-      const target = r.daily_target ?? it.target_count;
-      return (r.current_count || 0) >= target;
-    }).length;
-    sum += Math.min(1, completedCount / dayActiveItems.length);
+    const s = await getAthkarStatsForDate(d);
+    sum += s.ratio;
   }
   const percent = Math.round((sum / elapsed.length) * 100);
+
   return {
     week_start: isoDate(startOfWeek()),
     week_end: isoDate(endOfWeek()),

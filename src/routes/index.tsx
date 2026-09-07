@@ -40,6 +40,7 @@ import { getDailySelection, dayFillRatio } from "@/lib/quran-progress";
 import { getNotificationLogs } from "@/lib/notifications";
 import { surahName, totalPagesFor } from "@/lib/quran-text";
 import { isHabitActiveOnDate } from "@/lib/habits";
+import { getAthkarStatsForDate, getDeletedThikrItems, getDeletedThikrGroups } from "@/lib/athkar";
 import { useAuth } from "@/context/AuthContext";
 import { AuthModal } from "@/components/AuthModal";
 
@@ -75,17 +76,8 @@ export function Home() {
   // Reactive Athkar progress for active date
   const athkarPct = useLiveQuery(async () => {
     if (!db) return 0;
-    const activeThikrs = await db.thikr_items.toArray();
-    if (activeThikrs.length === 0) return 0;
-    const tProgress = await db.thikr_progress.where("date").equals(activeDate).toArray();
-    
-    let sumRatios = 0;
-    for (const it of activeThikrs) {
-      const p = tProgress.find((r) => r.thikr_item_id === it.id);
-      const count = p ? p.current_count : 0;
-      sumRatios += Math.min(1, count / it.target_count);
-    }
-    return Math.round((sumRatios / activeThikrs.length) * 100);
+    const stats = await getAthkarStatsForDate(activeDate);
+    return stats.pct;
   }, [activeDate]) ?? 0;
 
   // Reactive Habits progress for active date
@@ -206,14 +198,8 @@ export function Home() {
       const qPct = qTotalPages > 0 ? Math.min(100, Math.round((qPagesRead / qTotalPages) * 100)) : 0;
 
       // Athkar
-      const tProgress = await db.thikr_progress.where("date").equals(iso).toArray();
-      let tSumRatios = 0;
-      for (const it of activeThikrs) {
-        const p = tProgress.find((r) => r.thikr_item_id === it.id);
-        const count = p ? p.current_count : 0;
-        tSumRatios += Math.min(1, count / it.target_count);
-      }
-      const tPct = activeThikrs.length > 0 ? Math.min(100, Math.round((tSumRatios / activeThikrs.length) * 100)) : 0;
+      const athkarStats = await getAthkarStatsForDate(iso);
+      const tPct = athkarStats.pct;
 
       // Habits
       const filteredHabits = activeHabits.filter((h) => isHabitActiveOnDate(h, iso));
@@ -395,26 +381,50 @@ export function Home() {
     const qPct = qTotalPages > 0 ? Math.round((qPagesRead / qTotalPages) * 100) : 0;
     
     // 2. Athkar Details
-    const activeThikrs = await db.thikr_items.toArray();
+    const athkarStats = await getAthkarStatsForDate(selectedDate);
+    const tPct = athkarStats.pct;
+    
+    const deletedItems = getDeletedThikrItems();
+    const deletedGroups = getDeletedThikrGroups();
+    const rawGroups = await db.thikr_groups.toArray();
+    const activeGroupIds = new Set(
+      rawGroups
+        .filter((g) => {
+          const k1 = String(g.id);
+          const k2 = g.global_id ? String(g.global_id).toLowerCase() : "";
+          const k3 = g.name ? g.name.trim().toLowerCase() : "";
+          return !deletedGroups.has(k1) && !deletedGroups.has(k2) && !deletedGroups.has(k3);
+        })
+        .map((g) => g.id)
+    );
+    const rawThikrs = await db.thikr_items.toArray();
+    const activeThikrs = rawThikrs.filter((it) => {
+      const k1 = String(it.id);
+      const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
+      const k3 = it.name ? it.name.trim().toLowerCase() : "";
+      if (deletedItems.has(k1) || deletedItems.has(k2) || deletedItems.has(k3)) return false;
+      if (it.group_id != null && !activeGroupIds.has(it.group_id)) return false;
+      return true;
+    });
     const tProgress = await db.thikr_progress.where("date").equals(selectedDate).toArray();
-    let tSumRatios = 0;
     const tDetailsList = [];
     
     for (const it of activeThikrs) {
       const p = tProgress.find((r) => r.thikr_item_id === it.id);
+      if (p?.excluded) continue;
+      const target = p?.daily_target ?? it.target_count ?? 1;
       const count = p ? p.current_count : 0;
-      tSumRatios += Math.min(1, count / it.target_count);
+      const isDone = Boolean(p?.completed) || count >= target;
       
-      if (count > 0 || p?.completed) {
+      if (count > 0 || isDone) {
         tDetailsList.push({
           name: it.name,
           count,
-          target: it.target_count,
-          completed: p?.completed ?? (count >= it.target_count),
+          target,
+          completed: isDone,
         });
       }
     }
-    const tPct = activeThikrs.length > 0 ? Math.round((tSumRatios / activeThikrs.length) * 100) : 0;
     
     // 3. Habits Details
     const activeHabits = await db.custom_habits.where("status").equals("active").toArray();

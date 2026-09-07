@@ -25,6 +25,7 @@ import {
   restoreItemForDate,
   getDeletedThikrItems,
   getDeletedThikrGroups,
+  cleanupOrphanedThikrs,
   type WeeklyStats,
 } from "@/lib/athkar";
 import { TasbihCounter } from "@/components/TasbihCounter";
@@ -77,6 +78,11 @@ function AthkarScreen() {
   const deletedItemsSet = useMemo(() => getDeletedThikrItems(), [rawItems]);
   const deletedGroupsSet = useMemo(() => getDeletedThikrGroups(), [rawGroups]);
 
+  // Clean up any orphaned ghost items from deleted groups immediately
+  useEffect(() => {
+    cleanupOrphanedThikrs();
+  }, []);
+
   const groups = useMemo(() => {
     return rawGroups.filter((g) => {
       const k1 = String(g.id);
@@ -86,14 +92,22 @@ function AthkarScreen() {
     });
   }, [rawGroups, deletedGroupsSet]);
 
+  const activeGroupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
+
   const items = useMemo(() => {
     return rawItems.filter((it) => {
       const k1 = String(it.id);
       const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
       const k3 = it.name ? it.name.trim().toLowerCase() : "";
-      return !deletedItemsSet.has(k1) && !deletedItemsSet.has(k2) && !deletedItemsSet.has(k3);
+      if (deletedItemsSet.has(k1) || deletedItemsSet.has(k2) || deletedItemsSet.has(k3)) {
+        return false;
+      }
+      if (it.group_id != null && !activeGroupIds.has(it.group_id)) {
+        return false;
+      }
+      return true;
     });
-  }, [rawItems, deletedItemsSet]);
+  }, [rawItems, deletedItemsSet, activeGroupIds]);
 
   const progressList = useLiveQuery(
     () => db.thikr_progress.where("date").equals(selectedDate).toArray(),
@@ -118,20 +132,32 @@ function AthkarScreen() {
     return days.map((d) => {
       const dayProgress = pRows.filter((r) => r.date === d);
       const activeItems = items.filter((it) => {
+        if (it.created_at && it.created_at.slice(0, 10) > d) {
+          const hasProg = dayProgress.some((p) => p.thikr_item_id === it.id && (p.current_count > 0 || p.completed));
+          if (!hasProg) return false;
+        }
         const r = dayProgress.find((p) => p.thikr_item_id === it.id);
         return !r?.excluded;
       });
       if (activeItems.length === 0) {
-        return { date: d, ratio: dayProgress.length > 0 ? 1 : 0 };
+        const hasAny = dayProgress.some((r) => !r.excluded && (r.completed || (r.current_count || 0) > 0));
+        return { date: d, ratio: hasAny ? 1 : 0 };
       }
-      const completedCount = activeItems.filter((it) => {
+      let completedCount = 0;
+      let sumRatio = 0;
+      for (const it of activeItems) {
         const r = dayProgress.find((p) => p.thikr_item_id === it.id);
-        if (!r) return false;
-        if (r.completed) return true;
-        const target = r.daily_target ?? it.target_count;
-        return (r.current_count || 0) >= target;
-      }).length;
-      const ratio = completedCount / activeItems.length;
+        const target = r?.daily_target ?? it.target_count ?? 1;
+        const count = r?.current_count ?? 0;
+        const isDone = Boolean(r?.completed) || count >= target;
+        if (isDone) {
+          completedCount++;
+          sumRatio += 1;
+        } else {
+          sumRatio += Math.min(1, count / target);
+        }
+      }
+      const ratio = completedCount === activeItems.length ? 1 : Math.min(1, sumRatio / activeItems.length);
       return { date: d, ratio };
     });
   }, [items]) ?? [];
@@ -154,7 +180,7 @@ function AthkarScreen() {
   const [showAddGroup, setShowAddGroup] = useState(false);
   const [preselectedGroupId, setPreselectedGroupId] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{
-    type: "item" | "group";
+    type: "item" | "group" | "none_items";
     id: number;
     title: string;
   } | null>(null);
@@ -207,22 +233,34 @@ function AthkarScreen() {
       if (!c.iso) continue;
       const dayProgress = monthProgressRows.filter((r) => r.date === c.iso);
       const activeItems = items.filter((it) => {
+        if (it.created_at && it.created_at.slice(0, 10) > c.iso!) {
+          const hasProg = dayProgress.some((p) => p.thikr_item_id === it.id && (p.current_count > 0 || p.completed));
+          if (!hasProg) return false;
+        }
         const r = dayProgress.find((p) => p.thikr_item_id === it.id);
         return !r?.excluded;
       });
 
       if (activeItems.length === 0) {
-        out[c.iso] = dayProgress.length > 0 ? 1 : 0;
+        const hasAny = dayProgress.some((r) => !r.excluded && (r.completed || (r.current_count || 0) > 0));
+        out[c.iso] = hasAny ? 1 : 0;
         continue;
       }
-      const completedCount = activeItems.filter((it) => {
+      let completedCount = 0;
+      let sumRatio = 0;
+      for (const it of activeItems) {
         const r = dayProgress.find((p) => p.thikr_item_id === it.id);
-        if (!r) return false;
-        if (r.completed) return true;
-        const target = r.daily_target ?? it.target_count;
-        return (r.current_count || 0) >= target;
-      }).length;
-      out[c.iso] = Math.min(1, completedCount / activeItems.length);
+        const target = r?.daily_target ?? it.target_count ?? 1;
+        const count = r?.current_count ?? 0;
+        const isDone = Boolean(r?.completed) || count >= target;
+        if (isDone) {
+          completedCount++;
+          sumRatio += 1;
+        } else {
+          sumRatio += Math.min(1, count / target);
+        }
+      }
+      out[c.iso] = completedCount === activeItems.length ? 1 : Math.min(1, sumRatio / activeItems.length);
     }
     return out;
   }, [items, monthCells, monthProgressRows]);
@@ -360,6 +398,7 @@ function AthkarScreen() {
                   const isSelected = cellDate === selectedDate;
                   const ratio = monthFills[cellDate] ?? 0;
                   const pct = Math.round(ratio * 100);
+                  const isFull = ratio >= 0.99 || pct >= 100;
 
                   return (
                     <div
@@ -370,7 +409,7 @@ function AthkarScreen() {
                           ? "border-[color:var(--athkar)] ring-2 ring-[color:var(--athkar)] ring-offset-1 shadow-xs"
                           : isToday
                           ? "border-[color:var(--athkar)]/50 ring-1 ring-[color:var(--athkar)]/25 ring-offset-1 shadow-xs"
-                          : ratio >= 1
+                          : isFull
                           ? "border-emerald-200"
                           : "border-slate-100"
                       }`}
@@ -387,17 +426,17 @@ function AthkarScreen() {
                       <div
                         className="relative flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold tabular-nums select-none"
                         style={{
-                          background: ratio >= 1
+                          background: isFull
                             ? "var(--athkar)"
                             : ratio > 0
                             ? `conic-gradient(var(--athkar) 0% ${pct}%, #f1f5f9 ${pct}% 100%)`
                             : "transparent",
-                          color: ratio >= 1 ? "white" : "#475569",
+                          color: isFull ? "white" : "#475569",
                           border: ratio === 0 ? "1px solid #f1f5f9" : undefined
                         }}
                       >
                         {/* Inner white mask for ring progress */}
-                        {ratio > 0 && ratio < 1 && (
+                        {ratio > 0 && !isFull && (
                           <div className="absolute inset-[2.5px] rounded-full bg-white" />
                         )}
                         <span className="relative z-10">
@@ -410,8 +449,8 @@ function AthkarScreen() {
                         {items.length > 0 && (
                           <MiniFlower
                             type="jasmine"
-                            completed={ratio >= 0.5}
-                            size={ratio >= 1.0 ? 14 : ratio > 0 ? 11 : 8}
+                            completed={isFull}
+                            size={isFull ? 14 : ratio > 0 ? 11 : 8}
                           />
                         )}
                       </div>
@@ -469,7 +508,7 @@ function AthkarScreen() {
                 setConfirmDelete({
                   type: "group",
                   id: g.id!,
-                  title: `حذف مجموعة «${g.name}»؟ (الأذكار داخلها لن تُحذف)`,
+                  title: `حذف مجموعة «${g.name}» وجميع الأذكار بداخلها نهائياً؟`,
                 });
               }}
               onDeleteItem={async (id) => {
@@ -490,6 +529,13 @@ function AthkarScreen() {
               onOpen={setOpenCounter}
               onEditItem={setEditingItem}
               selectedDate={selectedDate}
+              onDeleteGroup={() => {
+                setConfirmDelete({
+                  type: "none_items",
+                  id: 0,
+                  title: `حذف جميع الأذكار غير المصنفة (${grouped.get("none")!.length} أذكار) وسجلاتها نهائياً؟`,
+                });
+              }}
               onDeleteItem={async (id) => {
                 const item = items.find((it) => it.id === id);
                 setConfirmDelete({
@@ -587,6 +633,29 @@ function AthkarScreen() {
                   إلغاء
                 </button>
               </div>
+            ) : confirmDelete.type === "none_items" ? (
+              <div className="flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(null)}
+                  className="flex-1 rounded-2xl bg-slate-100 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200 cursor-pointer active:scale-98 transition-all"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const noneItems = grouped.get("none") || [];
+                    for (const it of noneItems) {
+                      if (it.id) await deleteItem(it.id);
+                    }
+                    setConfirmDelete(null);
+                  }}
+                  className="flex-1 rounded-2xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-700 cursor-pointer active:scale-98 transition-all"
+                >
+                  نعم، احذف جميع الأذكار
+                </button>
+              </div>
             ) : (
               <div className="flex gap-2.5">
                 <button
@@ -604,7 +673,7 @@ function AthkarScreen() {
                   }}
                   className="flex-1 rounded-2xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-700 cursor-pointer active:scale-98 transition-all"
                 >
-                  نعم، احذف المجموعة
+                  نعم، احذف المجموعة وأذكارها
                 </button>
               </div>
             )}
@@ -650,7 +719,7 @@ function GroupBlock({
             ({items.length})
           </span>
         </button>
-        {group && onDeleteGroup && (
+        {group && onDeleteGroup ? (
           <button
             onClick={onDeleteGroup}
             aria-label="حذف المجموعة"
@@ -658,7 +727,17 @@ function GroupBlock({
           >
             <Trash2 className="h-4 w-4" />
           </button>
-        )}
+        ) : !group && onDeleteGroup && items.length > 0 ? (
+          <button
+            onClick={onDeleteGroup}
+            aria-label="حذف جميع الأذكار غير المصنفة"
+            title="حذف جميع الأذكار غير المصنفة"
+            className="flex items-center gap-1 text-[11px] font-bold text-rose-500 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-xl transition-colors cursor-pointer"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            <span>حذف الكل</span>
+          </button>
+        ) : null}
       </header>
       {!collapsed && (
         <>
