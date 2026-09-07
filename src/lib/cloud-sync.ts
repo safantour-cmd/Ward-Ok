@@ -13,6 +13,7 @@ import {
   type DailyQuranSelection,
   type NafahatDailyLog
 } from "./db";
+import { getDeletedThikrItems, getDeletedThikrGroups } from "./athkar";
 
 let quotaExceededCooldownUntil = 0;
 let syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -94,8 +95,27 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
       }
     }
 
+    const deletedItems = getDeletedThikrItems();
+    const deletedGroups = getDeletedThikrGroups();
+
+    const cleanThikrItems = thikrItems.filter((i) => {
+      const k1 = String(i.id);
+      const k2 = i.global_id ? String(i.global_id).toLowerCase() : "";
+      const k3 = i.name ? i.name.trim().toLowerCase() : "";
+      return !deletedItems.has(k1) && !deletedItems.has(k2) && !deletedItems.has(k3);
+    });
+
+    const cleanThikrGroups = thikrGroups.filter((g) => {
+      const k1 = String(g.id);
+      const k2 = g.global_id ? String(g.global_id).toLowerCase() : "";
+      const k3 = g.name ? g.name.trim().toLowerCase() : "";
+      return !deletedGroups.has(k1) && !deletedGroups.has(k2) && !deletedGroups.has(k3);
+    });
+
     // Generate lightweight content signature to avoid writing if local data has not changed
     const contentSignature = JSON.stringify({
+      ti: cleanThikrItems.map((i) => `${i.id}_${i.name}`).join(","),
+      tg: cleanThikrGroups.map((g) => `${g.id}_${g.name}`).join(","),
       tp: thikrProgress.length,
       tpLast: thikrProgress.slice(-5),
       pl: prayerLogs.length,
@@ -114,8 +134,8 @@ export async function pushLocalToCloudDirect(userId: string): Promise<boolean> {
 
     const dataPayload = JSON.parse(
       JSON.stringify({
-        thikrItems,
-        thikrGroups,
+        thikrItems: cleanThikrItems,
+        thikrGroups: cleanThikrGroups,
         thikrProgress,
         customHabits,
         customHabitProgress,
@@ -348,11 +368,16 @@ function mergeNafahatLogsList(local: NafahatDailyLog[], cloud: NafahatDailyLog[]
   return Array.from(map.values());
 }
 
-function mergeGenericItems<T extends { id?: number; global_id?: string; name?: string }>(local: T[], cloud: T[]): T[] {
+function mergeGenericItems<T extends { id?: number; global_id?: string; name?: string }>(
+  local: T[],
+  cloud: T[],
+  deletedChecker?: (item: T) => boolean
+): T[] {
   const localByGlobalId = new Map<string, T>();
   const localByName = new Map<string, T>();
 
   local.forEach((item) => {
+    if (deletedChecker && deletedChecker(item)) return;
     if (item.global_id) localByGlobalId.set(item.global_id, item);
     if (item.name) localByName.set(item.name.trim().toLowerCase(), item);
   });
@@ -361,6 +386,8 @@ function mergeGenericItems<T extends { id?: number; global_id?: string; name?: s
   const newCloudItems: T[] = [];
 
   cloud.forEach((cloudItem) => {
+    if (deletedChecker && deletedChecker(cloudItem)) return;
+
     const matchedLocal =
       (cloudItem.global_id ? localByGlobalId.get(cloudItem.global_id) : null) ||
       (cloudItem.name ? localByName.get(cloudItem.name.trim().toLowerCase()) : null);
@@ -383,6 +410,8 @@ function mergeGenericItems<T extends { id?: number; global_id?: string; name?: s
   });
 
   local.forEach((localItem) => {
+    if (deletedChecker && deletedChecker(localItem)) return;
+
     const isAlreadyInResult =
       (localItem.id != null && resultMap.has(localItem.id)) ||
       (localItem.global_id && Array.from(resultMap.values()).some((r) => r.global_id === localItem.global_id)) ||
@@ -504,8 +533,24 @@ export async function pullCloudToLocal(userId: string): Promise<boolean> {
     const mergedCustomHabitProgress = mergeCustomHabitProgressList(localCustomHabitProgress, Array.isArray(parsed.customHabitProgress) ? parsed.customHabitProgress : []);
     const mergedQuranDailyReading = mergeQuranDailyReadingList(localQuranDailyReading, Array.isArray(parsed.quranDailyReading) ? parsed.quranDailyReading : []);
     const mergedQuranSurahState = mergeQuranSurahStateList(localQuranSurahState, Array.isArray(parsed.quranSurahState) ? parsed.quranSurahState : []);
-    const mergedThikrItems = mergeGenericItems<ThikrItem>(localThikrItems, Array.isArray(parsed.thikrItems) ? parsed.thikrItems : []);
-    const mergedThikrGroups = mergeGenericItems<ThikrGroup>(localThikrGroups, Array.isArray(parsed.thikrGroups) ? parsed.thikrGroups : []);
+    const deletedThikr = getDeletedThikrItems();
+    const isThikrDeleted = (it: ThikrItem) => {
+      const k1 = String(it.id);
+      const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
+      const k3 = it.name ? it.name.trim().toLowerCase() : "";
+      return deletedThikr.has(k1) || deletedThikr.has(k2) || deletedThikr.has(k3);
+    };
+
+    const deletedGrp = getDeletedThikrGroups();
+    const isGroupDeleted = (g: ThikrGroup) => {
+      const k1 = String(g.id);
+      const k2 = g.global_id ? String(g.global_id).toLowerCase() : "";
+      const k3 = g.name ? g.name.trim().toLowerCase() : "";
+      return deletedGrp.has(k1) || deletedGrp.has(k2) || deletedGrp.has(k3);
+    };
+
+    const mergedThikrItems = mergeGenericItems<ThikrItem>(localThikrItems, Array.isArray(parsed.thikrItems) ? parsed.thikrItems : [], isThikrDeleted);
+    const mergedThikrGroups = mergeGenericItems<ThikrGroup>(localThikrGroups, Array.isArray(parsed.thikrGroups) ? parsed.thikrGroups : [], isGroupDeleted);
     const mergedCustomHabits = mergeGenericItems<CustomHabit>(localCustomHabits, Array.isArray(parsed.customHabits) ? parsed.customHabits : []);
     const mergedDailyQuranSelection = mergeDailyQuranSelectionList(localDailyQuranSelection, Array.isArray(parsed.dailyQuranSelection) ? parsed.dailyQuranSelection : []);
 

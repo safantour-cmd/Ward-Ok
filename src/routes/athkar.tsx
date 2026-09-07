@@ -20,6 +20,11 @@ import {
   resetToday,
   completeToday,
   updateItem,
+  updateDailyTarget,
+  excludeItemForDate,
+  restoreItemForDate,
+  getDeletedThikrItems,
+  getDeletedThikrGroups,
   type WeeklyStats,
 } from "@/lib/athkar";
 import { TasbihCounter } from "@/components/TasbihCounter";
@@ -66,9 +71,30 @@ function AthkarScreen() {
   };
 
   // Live queries for reactive updates
-  const groups = useLiveQuery(() => db.thikr_groups.orderBy("id").toArray()) ?? [];
-  const items = useLiveQuery(() => db.thikr_items.orderBy("id").toArray()) ?? [];
+  const rawGroups = useLiveQuery(() => db.thikr_groups.orderBy("id").toArray()) ?? [];
+  const rawItems = useLiveQuery(() => db.thikr_items.orderBy("id").toArray()) ?? [];
   
+  const deletedItemsSet = useMemo(() => getDeletedThikrItems(), [rawItems]);
+  const deletedGroupsSet = useMemo(() => getDeletedThikrGroups(), [rawGroups]);
+
+  const groups = useMemo(() => {
+    return rawGroups.filter((g) => {
+      const k1 = String(g.id);
+      const k2 = g.global_id ? String(g.global_id).toLowerCase() : "";
+      const k3 = g.name ? g.name.trim().toLowerCase() : "";
+      return !deletedGroupsSet.has(k1) && !deletedGroupsSet.has(k2) && !deletedGroupsSet.has(k3);
+    });
+  }, [rawGroups, deletedGroupsSet]);
+
+  const items = useMemo(() => {
+    return rawItems.filter((it) => {
+      const k1 = String(it.id);
+      const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
+      const k3 = it.name ? it.name.trim().toLowerCase() : "";
+      return !deletedItemsSet.has(k1) && !deletedItemsSet.has(k2) && !deletedItemsSet.has(k3);
+    });
+  }, [rawItems, deletedItemsSet]);
+
   const progressList = useLiveQuery(
     () => db.thikr_progress.where("date").equals(selectedDate).toArray(),
     [selectedDate]
@@ -84,20 +110,28 @@ function AthkarScreen() {
 
   const weeklyBeads = useLiveQuery(async () => {
     const days = weekDays(); // Sat..Fri
-    const allItems = await db.thikr_items.toArray();
-    if (allItems.length === 0) {
+    if (items.length === 0) {
       return days.map((d) => ({ date: d, ratio: 0 }));
     }
     const pRows = await db.thikr_progress.where("date").anyOf(days).toArray();
     
     return days.map((d) => {
       const dayProgress = pRows.filter((r) => r.date === d);
-      const completedCount = dayProgress.filter((r) => {
+      const activeItems = items.filter((it) => {
+        const r = dayProgress.find((p) => p.thikr_item_id === it.id);
+        return !r?.excluded;
+      });
+      if (activeItems.length === 0) {
+        return { date: d, ratio: dayProgress.length > 0 ? 1 : 0 };
+      }
+      const completedCount = activeItems.filter((it) => {
+        const r = dayProgress.find((p) => p.thikr_item_id === it.id);
+        if (!r) return false;
         if (r.completed) return true;
-        const it = allItems.find((item) => item.id === r.thikr_item_id);
-        return it && (r.current_count || 0) >= it.target_count;
+        const target = r.daily_target ?? it.target_count;
+        return (r.current_count || 0) >= target;
       }).length;
-      const ratio = completedCount / allItems.length;
+      const ratio = completedCount / activeItems.length;
       return { date: d, ratio };
     });
   }, [items]) ?? [];
@@ -172,16 +206,23 @@ function AthkarScreen() {
     for (const c of monthCells) {
       if (!c.iso) continue;
       const dayProgress = monthProgressRows.filter((r) => r.date === c.iso);
-      if (dayProgress.length === 0) {
-        out[c.iso] = 0;
+      const activeItems = items.filter((it) => {
+        const r = dayProgress.find((p) => p.thikr_item_id === it.id);
+        return !r?.excluded;
+      });
+
+      if (activeItems.length === 0) {
+        out[c.iso] = dayProgress.length > 0 ? 1 : 0;
         continue;
       }
-      const completedCount = dayProgress.filter((r) => {
+      const completedCount = activeItems.filter((it) => {
+        const r = dayProgress.find((p) => p.thikr_item_id === it.id);
+        if (!r) return false;
         if (r.completed) return true;
-        const it = items.find((item) => item.id === r.thikr_item_id);
-        return it ? (r.current_count || 0) >= it.target_count : (r.current_count || 0) > 0;
+        const target = r.daily_target ?? it.target_count;
+        return (r.current_count || 0) >= target;
       }).length;
-      out[c.iso] = Math.min(1, completedCount / items.length);
+      out[c.iso] = Math.min(1, completedCount / activeItems.length);
     }
     return out;
   }, [items, monthCells, monthProgressRows]);
@@ -481,6 +522,7 @@ function AthkarScreen() {
         <AddItemModal
           groups={groups}
           item={editingItem}
+          selectedDate={selectedDate}
           onClose={() => setEditingItem(null)}
           onSaved={async () => {
             setEditingItem(null);
@@ -510,31 +552,62 @@ function AthkarScreen() {
       {confirmDelete && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs animate-in fade-in duration-150">
           <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl border border-slate-100 text-center animate-in scale-in duration-150">
-            <h3 className="text-base font-bold text-slate-900 mb-2">تأكيد الحذف</h3>
-            <p className="text-sm text-slate-600 mb-6 leading-relaxed">{confirmDelete.title}</p>
-            <div className="flex gap-2.5">
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(null)}
-                className="flex-1 rounded-2xl bg-slate-100 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200 cursor-pointer active:scale-98 transition-all"
-              >
-                إلغاء
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (confirmDelete.type === "item") {
+            <h3 className="text-base font-bold text-slate-900 mb-2">
+              {confirmDelete.type === "item" ? "خيارات حذف الذكر" : "تأكيد حذف المجموعة"}
+            </h3>
+            <p className="text-sm text-slate-600 mb-5 leading-relaxed">{confirmDelete.title}</p>
+            
+            {confirmDelete.type === "item" ? (
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await excludeItemForDate(confirmDelete.id, selectedDate);
+                    setConfirmDelete(null);
+                  }}
+                  className="w-full rounded-2xl bg-teal-600 hover:bg-teal-700 py-2.5 text-xs font-bold text-white cursor-pointer active:scale-98 transition-all shadow-xs"
+                >
+                  استثناء لهذا اليوم فقط ({selectedDate})
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
                     await deleteItem(confirmDelete.id);
-                  } else if (confirmDelete.type === "group") {
+                    setConfirmDelete(null);
+                  }}
+                  className="w-full rounded-2xl bg-rose-600 hover:bg-rose-700 py-2.5 text-xs font-bold text-white cursor-pointer active:scale-98 transition-all shadow-xs"
+                >
+                  حذف نهائي من كل الأيام
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(null)}
+                  className="w-full rounded-2xl bg-slate-100 hover:bg-slate-200 py-2.5 text-xs font-bold text-slate-700 cursor-pointer active:scale-98 transition-all"
+                >
+                  إلغاء
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(null)}
+                  className="flex-1 rounded-2xl bg-slate-100 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200 cursor-pointer active:scale-98 transition-all"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
                     await deleteGroup(confirmDelete.id);
-                  }
-                  setConfirmDelete(null);
-                }}
-                className="flex-1 rounded-2xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-700 cursor-pointer active:scale-98 transition-all"
-              >
-                نعم، احذف
-              </button>
-            </div>
+                    setConfirmDelete(null);
+                  }}
+                  className="flex-1 rounded-2xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-700 cursor-pointer active:scale-98 transition-all"
+                >
+                  نعم، احذف المجموعة
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -597,9 +670,38 @@ function GroupBlock({
             <ul className="space-y-1.5">
               {items.map((it) => {
                 const p = progress.get(it.id!);
+                const isExcluded = Boolean(p?.excluded);
+                const effectiveTarget = p?.daily_target ?? it.target_count;
                 const count = p?.current_count ?? 0;
-                const done = p?.completed ?? false;
-                const ratio = Math.min(1, count / it.target_count);
+                const done = Boolean(p?.completed) || count >= effectiveTarget;
+                const ratio = Math.min(1, count / effectiveTarget);
+
+                if (isExcluded) {
+                  return (
+                    <li key={it.id}>
+                      <div className="flex items-center justify-between p-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 text-slate-600">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs line-through text-slate-400 font-medium">{it.name}</span>
+                          <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold">
+                            مستثنى اليوم
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await restoreItemForDate(it.id!, selectedDate);
+                          }}
+                          className="text-xs text-emerald-700 hover:text-emerald-800 font-bold px-2.5 py-1 bg-emerald-50 border border-emerald-200 rounded-xl cursor-pointer active:scale-95 transition-all shadow-2xs"
+                        >
+                          استعادة لليوم
+                        </button>
+                      </div>
+                    </li>
+                  );
+                }
+
+                const canVibrate = typeof window !== "undefined" && "vibrate" in navigator && localStorage.getItem("athkar_vibration_enabled") !== "false";
+
                 return (
                   <li key={it.id}>
                     <div className="flex items-stretch gap-1.5">
@@ -607,17 +709,17 @@ function GroupBlock({
                         role="button"
                         tabIndex={0}
                         onClick={async () => {
-                          await incrementToday(it.id!, it.target_count, selectedDate);
-                          if (navigator.vibrate) {
-                            navigator.vibrate(count + 1 >= it.target_count ? [40, 40, 60] : 8);
+                          await incrementToday(it.id!, effectiveTarget, selectedDate);
+                          if (canVibrate && navigator.vibrate) {
+                            navigator.vibrate(count + 1 >= effectiveTarget ? [40, 40, 60] : 8);
                           }
                         }}
                         onKeyDown={async (e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            await incrementToday(it.id!, it.target_count, selectedDate);
-                            if (navigator.vibrate) {
-                              navigator.vibrate(count + 1 >= it.target_count ? [40, 40, 60] : 8);
+                            await incrementToday(it.id!, effectiveTarget, selectedDate);
+                            if (canVibrate && navigator.vibrate) {
+                              navigator.vibrate(count + 1 >= effectiveTarget ? [40, 40, 60] : 8);
                             }
                           }
                         }}
@@ -635,7 +737,12 @@ function GroupBlock({
                               {it.name}
                             </div>
                             <div className="mt-0.5 text-xs text-muted-foreground font-semibold tabular-nums">
-                              {count} / {it.target_count}
+                              {count} / {effectiveTarget}
+                              {p?.daily_target ? (
+                                <span className="mr-1 text-[10px] text-teal-700 font-bold bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                  هدف اليوم
+                                </span>
+                              ) : null}
                               {done && (
                                 <span className="mr-1.5 rounded-full bg-[color:var(--athkar)]/20 px-1.5 py-0.5 text-[10px] font-bold text-[color:var(--athkar)] inline-block">
                                   اكتمل ✓
@@ -652,8 +759,8 @@ function GroupBlock({
                                 onClick={async (e) => {
                                   e.stopPropagation();
                                   e.preventDefault();
-                                  await completeToday(it.id!, it.target_count, selectedDate);
-                                  if (navigator.vibrate) {
+                                  await completeToday(it.id!, effectiveTarget, selectedDate);
+                                  if (canVibrate && navigator.vibrate) {
                                     navigator.vibrate([40, 40, 60]);
                                   }
                                 }}
@@ -672,7 +779,7 @@ function GroupBlock({
                                     e.stopPropagation();
                                     e.preventDefault();
                                     await decrementToday(it.id!, selectedDate);
-                                    if (navigator.vibrate) {
+                                    if (canVibrate && navigator.vibrate) {
                                       navigator.vibrate(8);
                                     }
                                   }}
@@ -687,7 +794,7 @@ function GroupBlock({
                                     e.stopPropagation();
                                     e.preventDefault();
                                     await resetToday(it.id!, selectedDate);
-                                    if (navigator.vibrate) {
+                                    if (canVibrate && navigator.vibrate) {
                                       navigator.vibrate(15);
                                     }
                                   }}
@@ -793,19 +900,21 @@ function AddItemModal({
   onSaved,
   defaultGroupId = null,
   item = null,
+  selectedDate,
 }: {
   groups: ThikrGroup[];
   onClose: () => void;
   onSaved: () => void;
   defaultGroupId?: number | null;
   item?: ThikrItem | null;
+  selectedDate?: string;
 }) {
   const [name, setName] = useState(item ? item.name : "");
   const [target, setTarget] = useState(item ? item.target_count : 33);
   const [groupId, setGroupId] = useState<number | null>(item ? item.group_id : defaultGroupId);
   const [busy, setBusy] = useState(false);
 
-  async function save() {
+  async function savePermanent() {
     if (!name.trim()) return;
     setBusy(true);
     try {
@@ -820,12 +929,23 @@ function AddItemModal({
     }
   }
 
+  async function saveOnlyToday() {
+    if (!item?.id || !selectedDate) return;
+    setBusy(true);
+    try {
+      await updateDailyTarget(item.id, target, selectedDate);
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <ModalShell title={item ? "تعديل الذكر" : "ذكر جديد"} onClose={onClose}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          save();
+          savePermanent();
         }}
         className="space-y-4 animate-in fade-in duration-200"
       >
@@ -895,21 +1015,53 @@ function AddItemModal({
             </select>
           </label>
         )}
-        <div className="mt-5 flex gap-2 pt-2">
-          <button
-            type="submit"
-            disabled={busy || !name.trim()}
-            className="flex-1 rounded-xl bg-[color:var(--athkar)] py-2.5 text-sm font-bold text-white disabled:opacity-50 active:scale-98 transition-transform cursor-pointer"
-          >
-            {busy ? "جاري الحفظ..." : "حفظ الذكر"}
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-bold active:scale-98 transition-transform cursor-pointer"
-          >
-            إلغاء
-          </button>
+        <div className="mt-5 pt-2">
+          {item && selectedDate ? (
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                disabled={busy || !name.trim()}
+                onClick={saveOnlyToday}
+                className="w-full rounded-xl bg-teal-600 hover:bg-teal-700 py-2.5 text-xs font-bold text-white disabled:opacity-50 active:scale-98 transition-transform cursor-pointer shadow-xs"
+              >
+                {busy ? "جاري الحفظ..." : `تعديل لهذا اليوم فقط (${selectedDate})`}
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy || !name.trim()}
+                  onClick={savePermanent}
+                  className="flex-1 rounded-xl bg-[color:var(--athkar)] hover:opacity-90 py-2.5 text-xs font-bold text-white disabled:opacity-50 active:scale-98 transition-transform cursor-pointer shadow-xs"
+                >
+                  {busy ? "جاري الحفظ..." : "تعديل دائم لجميع الأيام"}
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-xl border border-border bg-white px-4 py-2.5 text-xs font-bold active:scale-98 transition-transform cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={busy || !name.trim()}
+                className="flex-1 rounded-xl bg-[color:var(--athkar)] py-2.5 text-sm font-bold text-white disabled:opacity-50 active:scale-98 transition-transform cursor-pointer"
+              >
+                {busy ? "جاري الحفظ..." : "حفظ الذكر"}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-bold active:scale-98 transition-transform cursor-pointer"
+              >
+                إلغاء
+              </button>
+            </div>
+          )}
         </div>
       </form>
     </ModalShell>

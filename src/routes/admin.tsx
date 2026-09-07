@@ -198,6 +198,9 @@ async function loadSingleMemberCloudData(m: UserProfileDoc): Promise<UserCloudDa
   return null;
 }
 
+const memberStatsCache = new WeakMap<UserCloudData, Map<string, any>>();
+const memberSubmittedCache = new WeakMap<UserCloudData, Map<string, boolean>>();
+
 function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
   if (!uData) {
     return {
@@ -213,10 +216,21 @@ function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
       sunnahPct: 0,
     };
   }
+
+  const cacheKey = targetDate || "__overall__";
+  let userCache = memberStatsCache.get(uData);
+  if (!userCache) {
+    userCache = new Map();
+    memberStatsCache.set(uData, userCache);
+  }
+  if (userCache.has(cacheKey)) {
+    return userCache.get(cacheKey);
+  }
+
   if (!targetDate) {
     const s = getMemberStats(uData);
     const totalAvg = Math.round((s.quranPct + s.athkarPct + s.prayerPct + s.habitsPct) / 4);
-    return {
+    const res = {
       ...s,
       totalAvg,
       salawatCount: 0,
@@ -225,6 +239,8 @@ function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
       hadayaRevivedCount: 0,
       sunnahPct: 0,
     };
+    userCache.set(cacheKey, res);
+    return res;
   }
 
   // 1. Quran % on targetDate
@@ -253,28 +269,42 @@ function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
   if (thikrItems.length > 0) {
     let sumThikrPct = 0;
     let counted = 0;
+    let activeItemCount = 0;
+
     thikrItems.forEach((item: any) => {
-      const target = item.target_count || 1;
       let curr = 0;
       let isDone = false;
+      let isExcluded = false;
+
       if (uData.thikrProgress && Array.isArray(uData.thikrProgress)) {
         const prog = uData.thikrProgress.find((tp: any) => 
           (tp.thikr_item_id === item.id || tp.item_id === item.id || tp.id === item.id || (tp.thikr_text && item.text && tp.thikr_text === item.text)) && 
           tp.date === targetDate
         );
         if (prog) {
-          curr = prog.current_count || 0;
-          isDone = Boolean(prog.completed) || curr >= target;
-          if (curr > 0 || isDone) counted++;
+          if (prog.excluded) {
+            isExcluded = true;
+          } else {
+            const target = prog.daily_target ?? item.target_count ?? 1;
+            curr = prog.current_count || 0;
+            isDone = Boolean(prog.completed) || curr >= target;
+            if (curr > 0 || isDone) counted++;
+          }
         }
       }
-      if (isDone || curr > 0) {
-        const pct = isDone || curr >= target ? 100 : Math.min(100, Math.round((curr / target) * 100));
-        sumThikrPct += pct;
+
+      if (!isExcluded) {
+        activeItemCount++;
+        const target = item.target_count || 1;
+        if (isDone || curr > 0) {
+          const pct = isDone || curr >= target ? 100 : Math.min(100, Math.round((curr / target) * 100));
+          sumThikrPct += pct;
+        }
       }
     });
-    if (counted > 0) {
-      athkarPct = Math.round(sumThikrPct / thikrItems.length);
+
+    if (activeItemCount > 0 && counted > 0) {
+      athkarPct = Math.round(sumThikrPct / activeItemCount);
     }
   }
 
@@ -334,7 +364,7 @@ function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
   }
 
   const totalAvg = Math.round((quranPct + athkarPct + prayerPct + habitsPct) / 4);
-  return {
+  const finalResult = {
     quranPct,
     athkarPct,
     prayerPct,
@@ -346,18 +376,35 @@ function getMemberStatsForDate(uData?: UserCloudData, targetDate?: string) {
     hadayaRevivedCount,
     sunnahPct,
   };
+  userCache.set(cacheKey, finalResult);
+  return finalResult;
 }
 
 function hasMemberSubmittedOnDate(uData?: UserCloudData, targetDate?: string): boolean {
   if (!uData || !targetDate) return false;
-  if (uData.prayerLogs && uData.prayerLogs.some((p: any) => p.date === targetDate)) return true;
-  if (uData.thikrProgress && uData.thikrProgress.some((t: any) => t.date === targetDate && ((t.current_count || 0) > 0 || t.completed))) return true;
-  if (uData.customHabitProgress && uData.customHabitProgress.some((h: any) => h.date === targetDate && ((h.count || 0) > 0 || h.completed))) return true;
-  if (uData.quranDailyReading && uData.quranDailyReading.some((q: any) => q.date === targetDate && ((q.pages_read || 0) > 0 || q.completed))) return true;
-  if (uData.nafahatLogs && uData.nafahatLogs.some((n: any) => n.date === targetDate && ((n.salawat_count || 0) > 0 || (n.regular_sunnah_ids && n.regular_sunnah_ids.length > 0) || (n.rare_sunnah_ratings && Object.keys(n.rare_sunnah_ratings).length > 0)))) return true;
 
-  const stats = getMemberStatsForDate(uData, targetDate);
-  return stats.totalAvg > 0 || stats.quranPct > 0 || stats.athkarPct > 0 || stats.prayerPct > 0 || stats.habitsPct > 0 || stats.salawatCount > 0 || stats.sunnahDoneCount > 0 || stats.hadayaRevivedCount > 0;
+  let userCache = memberSubmittedCache.get(uData);
+  if (!userCache) {
+    userCache = new Map();
+    memberSubmittedCache.set(uData, userCache);
+  }
+  if (userCache.has(targetDate)) {
+    return userCache.get(targetDate)!;
+  }
+
+  let submitted = false;
+  if (uData.prayerLogs && uData.prayerLogs.some((p: any) => p.date === targetDate)) submitted = true;
+  else if (uData.thikrProgress && uData.thikrProgress.some((t: any) => t.date === targetDate && ((t.current_count || 0) > 0 || t.completed))) submitted = true;
+  else if (uData.customHabitProgress && uData.customHabitProgress.some((h: any) => h.date === targetDate && ((h.count || 0) > 0 || h.completed))) submitted = true;
+  else if (uData.quranDailyReading && uData.quranDailyReading.some((q: any) => q.date === targetDate && ((q.pages_read || 0) > 0 || q.completed))) submitted = true;
+  else if (uData.nafahatLogs && uData.nafahatLogs.some((n: any) => n.date === targetDate && ((n.salawat_count || 0) > 0 || (n.regular_sunnah_ids && n.regular_sunnah_ids.length > 0) || (n.rare_sunnah_ratings && Object.keys(n.rare_sunnah_ratings).length > 0)))) submitted = true;
+  else {
+    const stats = getMemberStatsForDate(uData, targetDate);
+    submitted = stats.totalAvg > 0 || stats.quranPct > 0 || stats.athkarPct > 0 || stats.prayerPct > 0 || stats.habitsPct > 0 || stats.salawatCount > 0 || stats.sunnahDoneCount > 0 || stats.hadayaRevivedCount > 0;
+  }
+
+  userCache.set(targetDate, submitted);
+  return submitted;
 }
 
 function getOverallMemberStats(uData: UserCloudData | undefined, uniqueDates: string[]) {
@@ -4457,18 +4504,18 @@ function AdminPage() {
                       {/* Soft Pastel Light Header Bar */}
                       <div
                         onClick={() => setCollapsedDays((prev) => ({ ...prev, [dateStr]: !prev[dateStr] }))}
-                        className="flex flex-wrap items-center justify-between gap-2 p-3 bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-100/60 text-slate-900 cursor-pointer hover:bg-teal-100/80 transition-all select-none border-b border-teal-200/80"
+                        className="flex items-center justify-between gap-2 p-3 bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-100/60 text-slate-900 cursor-pointer hover:bg-teal-100/80 transition-all select-none border-b border-teal-200/80"
                       >
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-0 overflow-x-auto no-scrollbar py-0.5 whitespace-nowrap">
                           <Calendar className="h-4.5 w-4.5 text-teal-700 shrink-0" />
-                          <h3 className="text-xs font-black text-slate-900">{formatArabicDate(dateStr)} ({dateStr})</h3>
-                          <span className="bg-emerald-200/70 text-emerald-950 border border-emerald-300 text-[10px] font-black px-2.5 py-0.5 rounded-md shadow-2xs">
+                          <h3 className="text-xs font-black text-slate-900 shrink-0">{formatArabicDate(dateStr)} ({dateStr})</h3>
+                          <span className="bg-emerald-200/70 text-emerald-950 border border-emerald-300 text-[10px] font-black px-2.5 py-0.5 rounded-md shadow-2xs shrink-0 whitespace-nowrap">
                             تمت التعبئة بواسطة {submittedMembers.length} من {sortedMembers.length} أعضاء
                           </span>
                         </div>
 
                         {/* Collapse Button */}
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 shrink-0">
                           <span className="p-1 text-teal-800">
                             {isDayCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
                           </span>

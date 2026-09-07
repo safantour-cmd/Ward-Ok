@@ -56,6 +56,8 @@ export interface ThikrProgress {
   date: string; // yyyy-mm-dd
   current_count: number;
   completed: boolean;
+  daily_target?: number;
+  excluded?: boolean;
 }
 
 export interface ThikrWeeklyEvaluation {

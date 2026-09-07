@@ -91,6 +91,41 @@ export async function deleteGlobalThikr(docId: string, name?: string): Promise<v
   }
 }
 
+/** Deleted tracking helpers to ensure deleted items & groups are never resurrected */
+export function getDeletedThikrItems(): Set<string> {
+  try {
+    const raw = localStorage.getItem("athkar_deleted_items");
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function recordDeletedThikrItem(identifier: string | number) {
+  try {
+    const set = getDeletedThikrItems();
+    set.add(String(identifier).trim().toLowerCase());
+    localStorage.setItem("athkar_deleted_items", JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+export function getDeletedThikrGroups(): Set<string> {
+  try {
+    const raw = localStorage.getItem("athkar_deleted_groups");
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function recordDeletedThikrGroup(identifier: string | number) {
+  try {
+    const set = getDeletedThikrGroups();
+    set.add(String(identifier).trim().toLowerCase());
+    localStorage.setItem("athkar_deleted_groups", JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
 export async function syncGlobalAthkarFromCloud(): Promise<void> {
   if (isQuotaExceeded()) return;
   try {
@@ -104,14 +139,23 @@ export async function syncGlobalAthkarFromCloud(): Promise<void> {
     if (!querySnapshot) return;
 
     const localItems = await db.thikr_items.toArray();
+    const deletedItems = getDeletedThikrItems();
 
     for (const docSnap of querySnapshot.docs) {
       const data = docSnap.data();
       if (!data || !data.name) continue;
 
       const cleanName = data.name.trim();
+      const docIdStr = String(docSnap.id).toLowerCase();
+      const cleanNameLower = cleanName.toLowerCase();
+
+      // If user deleted this item locally, do not resurrect it
+      if (deletedItems.has(docIdStr) || deletedItems.has(cleanNameLower)) {
+        continue;
+      }
+
       const existing = localItems.find(
-        (i) => (i.global_id && i.global_id === docSnap.id) || i.name.trim().toLowerCase() === cleanName.toLowerCase()
+        (i) => (i.global_id && i.global_id === docSnap.id) || i.name.trim().toLowerCase() === cleanNameLower
       );
 
       if (existing) {
@@ -168,6 +212,12 @@ export async function renameGroup(id: number, name: string) {
 }
 
 export async function deleteGroup(id: number) {
+  const grp = await db.thikr_groups.get(id);
+  if (grp) {
+    if (grp.global_id) recordDeletedThikrGroup(grp.global_id);
+    if (grp.name) recordDeletedThikrGroup(grp.name);
+    recordDeletedThikrGroup(grp.id!);
+  }
   await db.transaction("rw", db.thikr_groups, db.thikr_items, async () => {
     // detach items — do not delete them
     const items = await db.thikr_items.where("group_id").equals(id).toArray();
@@ -214,6 +264,12 @@ export async function updateItem(
 }
 
 export async function deleteItem(id: number) {
+  const item = await db.thikr_items.get(id);
+  if (item) {
+    if (item.global_id) recordDeletedThikrItem(item.global_id);
+    if (item.name) recordDeletedThikrItem(item.name);
+    recordDeletedThikrItem(item.id!);
+  }
   await db.transaction("rw", db.thikr_items, db.thikr_progress, async () => {
     await db.thikr_progress.where("thikr_item_id").equals(id).delete();
     await db.thikr_items.delete(id);
@@ -221,7 +277,43 @@ export async function deleteItem(id: number) {
   autoCloudSync();
 }
 
-/** ---------- Daily progress ---------- */
+/** ---------- Daily progress & per-day adjustments ---------- */
+
+export async function updateDailyTarget(itemId: number, dailyTarget: number, date?: string): Promise<ThikrProgress> {
+  const targetDate = date || isoDate();
+  const row = await getTodayProgress(itemId, targetDate);
+  const target = Math.max(1, Math.floor(dailyTarget));
+  const completed = row.current_count >= target;
+  await db.thikr_progress.update(row.id!, {
+    daily_target: target,
+    completed,
+    excluded: false,
+  });
+  autoCloudSync();
+  return { ...row, daily_target: target, completed, excluded: false };
+}
+
+export async function excludeItemForDate(itemId: number, date?: string): Promise<ThikrProgress> {
+  const targetDate = date || isoDate();
+  const row = await getTodayProgress(itemId, targetDate);
+  await db.thikr_progress.update(row.id!, {
+    excluded: true,
+    completed: true,
+  });
+  autoCloudSync();
+  return { ...row, excluded: true, completed: true };
+}
+
+export async function restoreItemForDate(itemId: number, date?: string): Promise<ThikrProgress> {
+  const targetDate = date || isoDate();
+  const row = await getTodayProgress(itemId, targetDate);
+  await db.thikr_progress.update(row.id!, {
+    excluded: false,
+    completed: false,
+  });
+  autoCloudSync();
+  return { ...row, excluded: false, completed: false };
+}
 
 export async function getTodayProgress(itemId: number, date?: string): Promise<ThikrProgress> {
   const targetDate = date || isoDate();
@@ -244,8 +336,9 @@ export async function incrementToday(itemId: number, target: number, date?: stri
   const targetDate = date || isoDate();
   const row = await getTodayProgress(itemId, targetDate);
   if (row.completed) return row;
-  const next = Math.min(target, row.current_count + 1);
-  const completed = next >= target;
+  const effectiveTarget = row.daily_target ?? target;
+  const next = Math.min(effectiveTarget, row.current_count + 1);
+  const completed = next >= effectiveTarget;
   await db.thikr_progress.update(row.id!, { current_count: next, completed });
   autoCloudSync();
   return { ...row, current_count: next, completed };
@@ -263,9 +356,10 @@ export async function resetToday(itemId: number, date?: string): Promise<ThikrPr
 export async function completeToday(itemId: number, target: number, date?: string): Promise<ThikrProgress> {
   const targetDate = date || isoDate();
   const row = await getTodayProgress(itemId, targetDate);
-  await db.thikr_progress.update(row.id!, { current_count: target, completed: true });
+  const effectiveTarget = row.daily_target ?? target;
+  await db.thikr_progress.update(row.id!, { current_count: effectiveTarget, completed: true });
   autoCloudSync();
-  return { ...row, current_count: target, completed: true };
+  return { ...row, current_count: effectiveTarget, completed: true };
 }
 
 export async function decrementToday(itemId: number, date?: string): Promise<ThikrProgress> {
@@ -313,7 +407,15 @@ export async function computeWeeklyStats(): Promise<WeeklyStats> {
   const days = weekDays();
   const today = isoDate();
   const elapsed = days.filter((d) => d <= today);
-  const items = await db.thikr_items.toArray();
+  const rawItems = await db.thikr_items.toArray();
+  const deleted = getDeletedThikrItems();
+  const items = rawItems.filter((it) => {
+    const k1 = String(it.id);
+    const k2 = it.global_id ? String(it.global_id).toLowerCase() : "";
+    const k3 = it.name ? it.name.trim().toLowerCase() : "";
+    return !deleted.has(k1) && !deleted.has(k2) && !deleted.has(k3);
+  });
+
   if (items.length === 0 || elapsed.length === 0) {
     return {
       week_start: isoDate(startOfWeek()),
@@ -323,16 +425,25 @@ export async function computeWeeklyStats(): Promise<WeeklyStats> {
     };
   }
   const rows = await db.thikr_progress.where("date").anyOf(elapsed).toArray();
-  // Ratio per day = completed_items_that_day / items.length
   let sum = 0;
   for (const d of elapsed) {
-    const completedCount = rows.filter((r) => {
-      if (r.date !== d) return false;
+    const dayRows = rows.filter((r) => r.date === d);
+    const dayActiveItems = items.filter((it) => {
+      const r = dayRows.find((p) => p.thikr_item_id === it.id);
+      return !r?.excluded;
+    });
+    if (dayActiveItems.length === 0) {
+      sum += 1;
+      continue;
+    }
+    const completedCount = dayActiveItems.filter((it) => {
+      const r = dayRows.find((p) => p.thikr_item_id === it.id);
+      if (!r) return false;
       if (r.completed) return true;
-      const it = items.find((item) => item.id === r.thikr_item_id);
-      return it && (r.current_count || 0) >= it.target_count;
+      const target = r.daily_target ?? it.target_count;
+      return (r.current_count || 0) >= target;
     }).length;
-    sum += Math.min(1, completedCount / items.length);
+    sum += Math.min(1, completedCount / dayActiveItems.length);
   }
   const percent = Math.round((sum / elapsed.length) * 100);
   return {
